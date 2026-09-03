@@ -8,6 +8,9 @@
  *  - the event log is append-only audit; nothing operational reads it
  *  - pipeline state lives on the job row, which is a different concern from
  *    decision state and is allowed a status column
+ *  - a pass-through image starts at 'pending_fetch', not 'pending_submit':
+ *    its output is the customer's original photo, so it must never enter the
+ *    paid submission path
  *  - the delivered pointer is deliberately distinct from "highest batch id",
  *    so an unconfirmed batch is structurally unreachable by retrieval
  */
@@ -90,7 +93,8 @@ export const MIGRATIONS: ReadonlyArray<{ name: string; sql: string }> = [
         last_error    text,
         updated_at    timestamptz not null default now(),
         constraint image_jobs_state_valid check (state in (
-          'pending_submit', 'submitted', 'completed', 'stored', 'posted', 'failed'
+          'pending_submit', 'pending_fetch', 'submitted', 'completed',
+          'stored', 'posted', 'failed'
         ))
       );
       create index image_jobs_state_idx on image_jobs (state);

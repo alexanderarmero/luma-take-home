@@ -134,3 +134,43 @@ describe("parseCatalog — content quirks are tolerated, not rejected", () => {
     expect(result.ok).toBe(true);
   });
 });
+
+describe("parseCatalog — messages point at the right place", () => {
+  it("reports the physical spreadsheet line, not the record index", () => {
+    // A blank line shifts every record after it. Pointing someone at the wrong
+    // row of their own sheet is worse than saying nothing.
+    const csv =
+      `${HEADER}\n` +
+      `HG-001,Vase,Ceramics,Sage,Stoneware,$48,https://example.com/a.jpg,,\n` +
+      `\n` +
+      `HG-002,Mug,Ceramics,Sage,Stoneware,$28,,,`;
+    const result = parseCatalog(csv);
+    if (!result.ok) throw new Error("expected success");
+    expect(result.warnings[0]).toContain("Row 4");
+  });
+
+  it("keeps line numbers honest across a quoted multi-line cell", () => {
+    const csv =
+      `${HEADER}\n` +
+      `HG-001,Vase,Ceramics,Sage,Stoneware,$48,https://example.com/a.jpg,"warm light,\nsteam",\n` +
+      `HG-002,Mug,Ceramics,Sage,Stoneware,$28,,,`;
+    const result = parseCatalog(csv);
+    if (!result.ok) throw new Error("expected success");
+    expect(result.warnings[0]).toContain("Row 4");
+  });
+
+  it("explains why a file with no usable rows was rejected", () => {
+    // The realistic case: a re-export where the Photo column came through
+    // blank. "Nothing usable" alone does not tell the reader which column
+    // to go and look at.
+    const csv =
+      `${HEADER}\n` +
+      `HG-001,Vase,Ceramics,Sage,Stoneware,$48,,,\n` +
+      `HG-002,Mug,Ceramics,Sage,Stoneware,$28,,,`;
+    const result = parseCatalog(csv);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
+    expect(result.warnings).toHaveLength(2);
+    expect(result.warnings.join(" ")).toContain("Photo");
+  });
+});

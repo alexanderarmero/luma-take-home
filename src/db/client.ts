@@ -16,23 +16,19 @@ export interface SqlClient {
    * Multi-statement script with no parameters, for DDL.
    *
    * Separate from `query` because the extended protocol permits only one
-   * statement per call — a migration file needs the simple protocol.
+   * statement per call — a migration script needs the simple protocol.
    */
   exec(sql: string): Promise<void>;
-}
 
-/** Runs `fn` inside a transaction, rolling back if it throws. */
-export async function inTransaction<T>(
-  db: SqlClient,
-  fn: (tx: SqlClient) => Promise<T>,
-): Promise<T> {
-  await db.query("begin");
-  try {
-    const result = await fn(db);
-    await db.query("commit");
-    return result;
-  } catch (error) {
-    await db.query("rollback");
-    throw error;
-  }
+  /**
+   * Runs `fn` against a single connection wrapped in BEGIN/COMMIT, rolling
+   * back if it throws.
+   *
+   * This belongs to the adapter, not to a helper over `query`. A pool hands
+   * out a different connection per `query` call, so issuing BEGIN, the body,
+   * and COMMIT as separate calls does not produce a transaction — it produces
+   * three autocommitted statements and one connection left idle-in-transaction
+   * for the next unlucky caller to inherit.
+   */
+  transaction<T>(fn: (tx: SqlClient) => Promise<T>): Promise<T>;
 }

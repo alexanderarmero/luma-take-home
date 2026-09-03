@@ -133,10 +133,21 @@ describe("POST /slack/commands", () => {
 
 describe("/luma status", () => {
   it("answers before anything has been uploaded", async () => {
-    const res = await app().request(slashCommand({ text: "status" }));
-    expect(res.status).toBe(200);
-    const payload = (await res.json()) as { text: string };
-    expect(payload.text.toLowerCase()).toContain("no batches");
+    // Its own database: asserting on emptiness against the shared one would
+    // pass only while this test happened to run before any that inserts.
+    const fresh = await createTestDb();
+    try {
+      const res = await createApp({
+        signingSecret: SECRET,
+        now: () => NOW,
+        defer: () => {},
+        db: fresh,
+      }).request(slashCommand({ text: "status" }));
+      const payload = (await res.json()) as { text: string };
+      expect(payload.text.toLowerCase()).toContain("no batches");
+    } finally {
+      await fresh.close();
+    }
   });
 
   it("reports the latest batch once one exists", async () => {
@@ -150,5 +161,29 @@ describe("/luma status", () => {
     const res = await app().request(slashCommand({ text: "wat" }));
     const payload = (await res.json()) as { text: string };
     expect(payload.text).toContain("status");
+  });
+
+  it("says something a person can act on when the database is unreachable", async () => {
+    const broken = {
+      query: async () => {
+        throw new Error("connection terminated unexpectedly");
+      },
+      exec: async () => {},
+      transaction: async () => {
+        throw new Error("connection terminated unexpectedly");
+      },
+    } as unknown as TestDb;
+
+    const res = await createApp({
+      signingSecret: SECRET,
+      now: () => NOW,
+      defer: () => {},
+      db: broken,
+    }).request(slashCommand({ text: "status" }));
+
+    expect(res.status).toBe(200);
+    const payload = (await res.json()) as { text: string };
+    expect(payload.text).toMatch(/database/i);
+    expect(payload.text).not.toContain("connection terminated");
   });
 });

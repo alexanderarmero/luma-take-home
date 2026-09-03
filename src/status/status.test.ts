@@ -39,7 +39,6 @@ describe("buildStatusSummary", () => {
     ]);
     await recordDecision(db, {
       imageId: images[0]!.id,
-      batchId: batch.id,
       decision: "approve",
       actor: "U_ELLIE",
     });

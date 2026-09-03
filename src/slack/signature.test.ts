@@ -121,4 +121,26 @@ describe("verifySlackSignature", () => {
     });
     expect(result).toEqual({ ok: false, reason: "stale_timestamp" });
   });
+
+  it("signs the exact timestamp header text, not a canonicalised number", () => {
+    // Slack builds its base string from the raw header. Normalising it first
+    // would reject a legitimate request whose header text is not identical to
+    // String(Number(header)).
+    const body = "command=%2Fluma";
+    const raw = `${NOW_S}.0`;
+    const digest = createHmac("sha256", SECRET)
+      .update(`v0:${raw}:${body}`)
+      .digest("hex");
+
+    const result = verifySlackSignature({
+      body,
+      headers: {
+        "x-slack-request-timestamp": raw,
+        "x-slack-signature": `v0=${digest}`,
+      },
+      signingSecret: SECRET,
+      nowMs: NOW,
+    });
+    expect(result).toEqual({ ok: true });
+  });
 });

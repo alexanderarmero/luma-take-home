@@ -48,8 +48,12 @@ export function verifySlackSignature({
   const skew = Math.abs(Math.floor(nowMs / 1000) - timestampSeconds);
   if (skew > MAX_SKEW_SECONDS) return { ok: false, reason: "stale_timestamp" };
 
+  // Slack signs the exact timestamp header text. Interpolating the parsed
+  // number instead would produce a different base string for any header whose
+  // text differs from its canonical form (a trailing ".0", a leading "+",
+  // leading zeros), rejecting a legitimate request as a bad signature.
   const expected = `v0=${createHmac("sha256", signingSecret)
-    .update(`v0:${timestampSeconds}:${body}`)
+    .update(`v0:${timestamp}:${body}`)
     .digest("hex")}`;
 
   // timingSafeEqual throws on unequal lengths, which would itself leak

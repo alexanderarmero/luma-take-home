@@ -58,7 +58,16 @@ export function createApp(deps: AppDeps) {
         return c.json(ephemeral("pong — deployed and listening."));
 
       case "status":
-        return c.json(ephemeral(await buildStatusSummary(deps.db)));
+        try {
+          return c.json(ephemeral(await buildStatusSummary(deps.db)));
+        } catch (error) {
+          // Slack renders an unhandled error as a bare "dispatch_failed",
+          // which tells a non-engineer nothing.
+          console.error("[/luma status] failed", error);
+          return c.json(
+            ephemeral("I can't reach the database right now — try again shortly."),
+          );
+        }
 
       case "slow":
         // Placeholder proving the deferral path: real subcommands that do work

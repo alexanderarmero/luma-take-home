@@ -23,7 +23,7 @@ export interface CatalogRow {
 
 export type ParseResult =
   | { ok: true; rows: CatalogRow[]; warnings: string[] }
-  | { ok: false; error: string };
+  | { ok: false; error: string; warnings: string[] };
 
 const REQUIRED_COLUMNS = [
   "SKU",
@@ -48,9 +48,11 @@ const REQUIRED_COLUMNS = [
  */
 export function parseCatalog(csv: string): ParseResult {
   const text = csv.replace(/^﻿/, "").trim();
-  if (text.length === 0) return { ok: false, error: "The file is empty." };
+  if (text.length === 0) {
+    return { ok: false, error: "The file is empty.", warnings: [] };
+  }
 
-  let records: Record<string, string>[];
+  let records: Array<{ record: Record<string, string>; info: { lines: number } }>;
   // Captured from the header callback so the column check still works on a
   // file that has a header and no rows under it.
   let found: string[] = [];
@@ -63,11 +65,16 @@ export function parseCatalog(csv: string): ParseResult {
       skip_empty_lines: true,
       trim: true,
       relax_column_count: true,
-    });
+      // Carries the true physical line of each record. Blank lines and quoted
+      // multi-line cells decouple record index from line number, and pointing
+      // someone at the wrong row of their spreadsheet is worse than silence.
+      info: true,
+    }) as never;
   } catch (error) {
     return {
       ok: false,
       error: `Could not read the file as CSV: ${(error as Error).message}`,
+      warnings: [],
     };
   }
 
@@ -76,6 +83,7 @@ export function parseCatalog(csv: string): ParseResult {
   if (missing.length > 0) {
     return {
       ok: false,
+      warnings: [],
       error:
         `This file is missing ${missing.length === 1 ? "a required column" : "required columns"}: ` +
         `${missing.join(", ")}.\n` +
@@ -88,9 +96,8 @@ export function parseCatalog(csv: string): ParseResult {
   const warnings: string[] = [];
   const seen = new Set<string>();
 
-  records.forEach((record, index) => {
-    // Spreadsheet row number as a person would count it: header is row 1.
-    const line = index + 2;
+  records.forEach(({ record, info }) => {
+    const line = info.lines;
     const sku = (record.SKU ?? "").trim();
     const photoUrl = (record.Photo ?? "").trim();
 
@@ -123,10 +130,15 @@ export function parseCatalog(csv: string): ParseResult {
   });
 
   if (rows.length === 0) {
+    // Hand back the warnings too. If every row was skipped because the Photo
+    // column came through blank, "nothing usable" alone tells the reader
+    // nothing about which column to go and look at.
     return {
       ok: false,
+      warnings,
       error:
-        "No product rows found — the file has a header but nothing usable under it.",
+        "No product rows found — the file has a header but nothing usable under it." +
+        (warnings.length > 0 ? " Here's what I skipped and why:" : ""),
     };
   }
 

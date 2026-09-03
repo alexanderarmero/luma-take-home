@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type { SqlClient } from "./client.js";
-import { inTransaction } from "./client.js";
 
 export type Decision = "approve" | "discard";
 export type ImageKind = "styled" | "pass_through";
@@ -63,68 +62,89 @@ export async function addImages(
   batchId: number,
   images: NewImage[],
 ): Promise<Image[]> {
-  const created: Image[] = [];
+  // One transaction for the whole batch. A partial insert would leave the
+  // batch reporting a total lower than the catalog, and completion
+  // (approved + discarded == total) would then be reached against a truncated
+  // set — so a half-ingested batch could be confirmed and delivered as whole.
+  return db.transaction(async (tx) => {
+    const created: Image[] = [];
 
-  for (const image of images) {
-    const id = randomUUID();
-    await db.query(
-      `insert into images (id, batch_id, sku, product_name, slot, kind, filename, prompt)
-       values ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [
+    for (const image of images) {
+      const id = randomUUID();
+      await tx.query(
+        `insert into images (id, batch_id, sku, product_name, slot, kind, filename, prompt)
+         values ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [
+          id,
+          batchId,
+          image.sku,
+          image.productName,
+          image.slot,
+          image.kind,
+          image.filename,
+          image.prompt ?? null,
+        ],
+      );
+      // Every image gets a job row up front: the pipeline resumes by scanning
+      // rows in non-terminal states, so an image with no row is invisible to
+      // it. A pass-through starts at 'pending_fetch' because its output is the
+      // customer's original photo — it must never reach the paid submission
+      // path, which is what makes the recap's "free" promise true.
+      await tx.query(
+        `insert into image_jobs (image_id, batch_id, state) values ($1, $2, $3)`,
+        [
+          id,
+          batchId,
+          image.kind === "pass_through" ? "pending_fetch" : "pending_submit",
+        ],
+      );
+      created.push({
         id,
         batchId,
-        image.sku,
-        image.productName,
-        image.slot,
-        image.kind,
-        image.filename,
-        image.prompt ?? null,
-      ],
-    );
-    // Every image gets a job row up front: the pipeline resumes by scanning
-    // rows in non-terminal states, so an image with no row is invisible to it.
-    await db.query(
-      `insert into image_jobs (image_id, batch_id, state) values ($1, $2, $3)`,
-      [id, batchId, image.kind === "pass_through" ? "pending_submit" : "pending_submit"],
-    );
-    created.push({
-      id,
-      batchId,
-      sku: image.sku,
-      slot: image.slot,
-      filename: image.filename,
-    });
-  }
+        sku: image.sku,
+        slot: image.slot,
+        filename: image.filename,
+      });
+    }
 
-  return created;
+    return created;
+  });
 }
 
 /**
  * Records a decision as membership.
  *
- * The delete-then-insert pair runs in one transaction so an image can never be
- * observed in both relations, and the event is appended in the same
- * transaction so the audit log can never disagree with the state it describes.
+ * The whole sequence runs in one transaction so an image can never be observed
+ * in both relations, and the event is written alongside so the audit log can
+ * never disagree with the state it describes.
+ *
+ * `batch_id` is derived from the image rather than accepted from the caller.
+ * A Slack interaction payload carries the batch in its action value, and one
+ * stale payload filing a decision under the wrong batch would make
+ * `batchCounts` over-count one batch, under-count another, and report a
+ * negative pending figure. The safest parameter is the one that cannot be
+ * passed.
  */
 export async function recordDecision(
   db: SqlClient,
-  input: { imageId: string; batchId: number; decision: Decision; actor: string },
+  input: { imageId: string; decision: Decision; actor: string },
 ): Promise<void> {
-  const { imageId, batchId, decision, actor } = input;
+  const { imageId, decision, actor } = input;
   const target = decision === "approve" ? "approved_images" : "discarded_images";
   const other = decision === "approve" ? "discarded_images" : "approved_images";
 
-  await inTransaction(db, async (tx) => {
+  await db.transaction(async (tx) => {
     await tx.query(`delete from ${other} where image_id = $1`, [imageId]);
     await tx.query(
-      `insert into ${target} (image_id, batch_id, actor) values ($1, $2, $3)
+      `insert into ${target} (image_id, batch_id, actor)
+       select id, batch_id, $2 from images where id = $1
        on conflict (image_id) do nothing`,
-      [imageId, batchId, actor],
+      [imageId, actor],
     );
     await tx.query(
       `insert into decision_events (image_id, batch_id, decision, actor)
-       values ($1, $2, $3, $4)`,
-      [imageId, batchId, decision, actor],
+       select id, batch_id, $2, $3 from images where id = $1`,
+      [imageId, decision, actor],
     );
   });
 }

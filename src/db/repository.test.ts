@@ -65,7 +65,6 @@ describe("decisions", () => {
 
     await recordDecision(db, {
       imageId: image!.id,
-      batchId: batch.id,
       decision: "approve",
       actor: "U_ELLIE",
     });
@@ -79,7 +78,7 @@ describe("decisions", () => {
   it("moves an image between relations when the decision changes", async () => {
     const batch = await createBatch(db, { sourceFilename: "c.csv" });
     const [image] = await addImages(db, batch.id, [rows("HG-002", 1)]);
-    const args = { imageId: image!.id, batchId: batch.id, actor: "U_ELLIE" };
+    const args = { imageId: image!.id, actor: "U_ELLIE" };
 
     await recordDecision(db, { ...args, decision: "approve" });
     await recordDecision(db, { ...args, decision: "discard" });
@@ -91,7 +90,7 @@ describe("decisions", () => {
   it("never leaves an image in both relations at once", async () => {
     const batch = await createBatch(db, { sourceFilename: "c.csv" });
     const [image] = await addImages(db, batch.id, [rows("HG-002", 1)]);
-    const args = { imageId: image!.id, batchId: batch.id, actor: "U_ELLIE" };
+    const args = { imageId: image!.id, actor: "U_ELLIE" };
 
     await recordDecision(db, { ...args, decision: "approve" });
     await recordDecision(db, { ...args, decision: "discard" });
@@ -108,7 +107,7 @@ describe("decisions", () => {
   it("appends an event for every action, including reversals", async () => {
     const batch = await createBatch(db, { sourceFilename: "c.csv" });
     const [image] = await addImages(db, batch.id, [rows("HG-002", 1)]);
-    const args = { imageId: image!.id, batchId: batch.id, actor: "U_ELLIE" };
+    const args = { imageId: image!.id, actor: "U_ELLIE" };
 
     await recordDecision(db, { ...args, decision: "approve" });
     await recordDecision(db, { ...args, decision: "discard" });
@@ -123,7 +122,6 @@ describe("decisions", () => {
     const [image] = await addImages(db, batch.id, [rows("HG-002", 1)]);
     const args = {
       imageId: image!.id,
-      batchId: batch.id,
       actor: "U_ELLIE",
       decision: "approve" as const,
     };
@@ -156,13 +154,11 @@ describe("batchCounts", () => {
 
     await recordDecision(db, {
       imageId: images[0]!.id,
-      batchId: batch.id,
       decision: "approve",
       actor: "U_ELLIE",
     });
     await recordDecision(db, {
       imageId: images[1]!.id,
-      batchId: batch.id,
       decision: "discard",
       actor: "U_ELLIE",
     });
@@ -199,5 +195,85 @@ describe("delivered pointer", () => {
     await setDeliveredBatch(db, first.id);
     await setDeliveredBatch(db, second.id);
     expect(await getDeliveredBatchId(db)).toBe(second.id);
+  });
+});
+
+describe("job rows", () => {
+  it("keeps a pass-through out of the paid submission path", async () => {
+    // Its output is the customer's original photo. If it started at
+    // 'pending_submit' the worker would submit all 24 blank-shot-idea rows in
+    // the real catalog to the image API, and the recap's "free" would be a lie.
+    const batch = await createBatch(db, { sourceFilename: "c.csv" });
+    await addImages(db, batch.id, [
+      { ...rows("HG-001", 1), kind: "pass_through" },
+      rows("HG-002", 1),
+    ]);
+
+    const { rows: jobs } = await db.query<{ state: string; filename: string }>(
+      `select j.state, i.filename from image_jobs j
+       join images i on i.id = j.image_id
+       order by i.sku`,
+    );
+    expect(jobs.map((j) => j.state)).toEqual(["pending_fetch", "pending_submit"]);
+  });
+
+  it("gives every image a job row, so none is invisible to the worker", async () => {
+    const batch = await createBatch(db, { sourceFilename: "c.csv" });
+    await addImages(db, batch.id, [rows("HG-002", 1), rows("HG-002", 2)]);
+    const { rows: jobs } = await db.query(`select image_id from image_jobs`);
+    expect(jobs).toHaveLength(2);
+  });
+});
+
+describe("addImages atomicity", () => {
+  it("leaves nothing behind when one row in the batch fails", async () => {
+    // A partially ingested batch would report a total lower than the catalog,
+    // and completion is checked against that total — so a truncated batch
+    // could be confirmed and delivered as though it were whole.
+    const batch = await createBatch(db, { sourceFilename: "c.csv" });
+
+    await expect(
+      addImages(db, batch.id, [
+        rows("HG-002", 1),
+        rows("HG-005", 1),
+        rows("HG-002", 1), // duplicate (batch, sku, slot)
+      ]),
+    ).rejects.toThrow();
+
+    const counts = await batchCounts(db, batch.id);
+    expect(counts.total).toBe(0);
+  });
+});
+
+describe("decision provenance", () => {
+  it("files the decision under the image's own batch", async () => {
+    const other = await createBatch(db, { sourceFilename: "other.csv" });
+    const batch = await createBatch(db, { sourceFilename: "c.csv" });
+    const [image] = await addImages(db, batch.id, [rows("HG-002", 1)]);
+
+    await recordDecision(db, {
+      imageId: image!.id,
+      decision: "approve",
+      actor: "U_ELLIE",
+    });
+
+    const { rows: membership } = await db.query<{ batch_id: string }>(
+      `select batch_id from approved_images where image_id = $1`,
+      [image!.id],
+    );
+    expect(Number(membership[0]!.batch_id)).toBe(batch.id);
+    expect(await batchCounts(db, other.id)).toMatchObject({ approved: 0 });
+  });
+
+  it("never reports a negative pending count", async () => {
+    const batch = await createBatch(db, { sourceFilename: "c.csv" });
+    const images = await addImages(db, batch.id, [rows("HG-002", 1)]);
+    await recordDecision(db, {
+      imageId: images[0]!.id,
+      decision: "approve",
+      actor: "U_ELLIE",
+    });
+    const counts = await batchCounts(db, batch.id);
+    expect(counts.pending).toBeGreaterThanOrEqual(0);
   });
 });

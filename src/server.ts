@@ -27,12 +27,20 @@ const app = createApp({
   db,
 });
 
-serve({ fetch: app.fetch, port: config.port }, ({ port }) => {
+const server = serve({ fetch: app.fetch, port: config.port }, ({ port }) => {
   console.log(`[server] listening on :${port}`);
 });
 
+// On a rolling deploy the platform sends SIGTERM while requests are still in
+// flight. Ending the pool first would abort them mid-response and show the
+// user a failed command instead of letting it finish.
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
-    void db.close().finally(() => process.exit(0));
+    console.log(`[server] ${signal} — draining`);
+    server.close(() => {
+      void db.close().finally(() => process.exit(0));
+    });
+    // Backstop: never hang a deploy on a stuck connection.
+    setTimeout(() => process.exit(0), 10_000).unref();
   });
 }
