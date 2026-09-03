@@ -70,6 +70,40 @@ describe("health", () => {
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({ status: "ok" });
   });
+
+  it("answers even while the database is still connecting", async () => {
+    // The whole point of starting the server before migrating: a database
+    // that is not up yet must not make the service unreachable.
+    const res = await createApp({
+      signingSecret: SECRET,
+      now: () => NOW,
+      defer: () => {},
+      db,
+      dbStatus: () => ({ state: "connecting", attempts: 0 }),
+    }).request("/healthz");
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      status: "degraded",
+      db: "connecting",
+    });
+  });
+
+  it("surfaces why the database is unreachable, so curl can diagnose it", async () => {
+    const res = await createApp({
+      signingSecret: SECRET,
+      now: () => NOW,
+      defer: () => {},
+      db,
+      dbStatus: () => ({
+        state: "error",
+        attempts: 8,
+        detail: "getaddrinfo ENOTFOUND postgres.railway.internal",
+      }),
+    }).request("/healthz");
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).toMatchObject({ status: "degraded", db: "error", dbAttempts: 8 });
+    expect(String(body.dbDetail)).toContain("ENOTFOUND");
+  });
 });
 
 describe("POST /slack/commands", () => {

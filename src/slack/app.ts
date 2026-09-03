@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { DbStatus } from "../db/bootstrap.js";
 import type { SqlClient } from "../db/client.js";
 import { buildStatusSummary } from "../status/status.js";
 import { verifySlackSignature } from "./signature.js";
@@ -13,6 +14,8 @@ export interface AppDeps {
    */
   defer: (task: () => Promise<void>) => void;
   db: SqlClient;
+  /** Reported by /healthz so a database problem is diagnosable with curl. */
+  dbStatus?: () => DbStatus;
 }
 
 const USAGE = [
@@ -29,7 +32,15 @@ function ephemeral(text: string) {
 export function createApp(deps: AppDeps) {
   const app = new Hono();
 
-  app.get("/healthz", (c) => c.json({ status: "ok" }));
+  app.get("/healthz", (c) => {
+    const db = deps.dbStatus?.() ?? { state: "ready" as const, attempts: 0 };
+    return c.json({
+      status: db.state === "ready" ? "ok" : "degraded",
+      db: db.state,
+      dbAttempts: db.attempts,
+      ...(db.detail ? { dbDetail: db.detail } : {}),
+    });
+  });
 
   app.post("/slack/commands", async (c) => {
     // The signature covers the exact bytes Slack sent. Parsing first and

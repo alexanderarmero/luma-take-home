@@ -1,18 +1,12 @@
 import { serve } from "@hono/node-server";
 import { loadConfig } from "./config/config.js";
-import { migrate } from "./db/migrate.js";
+import { createDbBootstrap } from "./db/bootstrap.js";
 import { createPostgresClient } from "./db/postgres.js";
 import { createApp } from "./slack/app.js";
 
 const config = loadConfig(process.env);
 const db = createPostgresClient(config.databaseUrl);
-
-// Migrations run on boot and are idempotent, so a redeploy is safe and a
-// fresh database needs no separate provisioning step.
-const applied = await migrate(db);
-if (applied.length > 0) {
-  console.log(`[db] applied migrations: ${applied.join(", ")}`);
-}
+const dbBootstrap = createDbBootstrap(db);
 
 const app = createApp({
   signingSecret: config.slack.signingSecret,
@@ -25,10 +19,20 @@ const app = createApp({
     });
   },
   db,
+  dbStatus: dbBootstrap.status,
 });
 
+// The HTTP server comes up first, deliberately.
+//
+// Migrating before serving means an unreachable database kills the process
+// before /healthz exists — the service is then down *and* undiagnosable, which
+// is how "everything times out at once" happens with no way to see why.
+// Now the health endpoint answers immediately and says what the database is
+// doing, and a private network that is not routable for the first few seconds
+// of a container's life is a retry rather than a crash.
 const server = serve({ fetch: app.fetch, port: config.port }, ({ port }) => {
   console.log(`[server] listening on :${port}`);
+  void dbBootstrap.start();
 });
 
 // On a rolling deploy the platform sends SIGTERM while requests are still in
