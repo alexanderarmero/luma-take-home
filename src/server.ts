@@ -4,6 +4,7 @@ import { createDbBootstrap } from "./db/bootstrap.js";
 import { createPostgresClient } from "./db/postgres.js";
 import { describeDatabaseUrl } from "./db/redact.js";
 import { createApp } from "./slack/app.js";
+import { createSlackClient } from "./slack/client.js";
 
 const config = loadConfig(process.env);
 const db = createPostgresClient(config.databaseUrl);
@@ -21,6 +22,9 @@ const app = createApp({
   },
   db,
   dbStatus: dbBootstrap.status,
+  slack: createSlackClient({ botToken: config.slack.botToken }),
+  reviewChannelId: config.slack.reviewChannelId,
+  approverUserId: config.slack.approverUserId,
 });
 
 // The HTTP server comes up first, deliberately.

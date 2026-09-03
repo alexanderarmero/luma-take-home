@@ -3,6 +3,13 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createBatch } from "../db/repository.js";
 import { createTestDb, type TestDb } from "../db/testing.js";
 import { createApp } from "./app.js";
+import type { SlackClient } from "./client.js";
+
+const fakeSlack: SlackClient = {
+  postMessage: async () => ({ ts: "1700000000.000001" }),
+  updateMessage: async () => {},
+  uploadImage: async () => ({ fileId: "F1" }),
+};
 
 const SECRET = "test-signing-secret";
 const NOW = 1_700_000_000_000;
@@ -27,6 +34,9 @@ function app() {
       deferred.push(task);
     },
     db,
+    slack: fakeSlack,
+    reviewChannelId: "C_REVIEW",
+    approverUserId: "U_ELLIE",
   });
 }
 
@@ -145,7 +155,9 @@ describe("POST /slack/commands", () => {
   it("does not run deferred work before responding", async () => {
     // A handler that defers work must still answer Slack immediately; the
     // three-second acknowledgement window is the whole reason `defer` exists.
-    const res = await app().request(slashCommand({ text: "slow" }));
+    // `verify` posts three messages and downloads a photo — far too slow to
+    // do before answering.
+    const res = await app().request(slashCommand({ text: "verify" }));
     expect(res.status).toBe(200);
     expect(deferred).toHaveLength(1);
   });
