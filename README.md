@@ -131,4 +131,16 @@ When you're ready, run the submit script from your repo root:
 ./submit.sh
 ```
 
-This handles everything: packages your AI session history, commits and pushes your latest changes, grants reviewer access, and registers your submission. You'll see a confirmation when it's done.
+---
+
+## Setting up the stack
+
+Run the wizard. It walks you through Railway, Postgres, and Slack one screen at
+a time, writes `.env.local` as you go, and verifies the deployed service
+answers at the end.
+
+```bash
+./scripts/setup.sh
+```
+
+Safe to stop with Ctrl-C and re-run — it offers back anything already saved.
