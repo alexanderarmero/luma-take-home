@@ -1,0 +1,188 @@
+import { describe, expect, it, vi } from "vitest";
+import { createSlackClient } from "./client.js";
+
+type FetchArgs = [string, RequestInit];
+
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function clientWith(fetchImpl: typeof fetch) {
+  return createSlackClient({ botToken: "xoxb-test", fetch: fetchImpl });
+}
+
+describe("postMessage", () => {
+  it("posts to the channel and returns the message timestamp", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ ok: true, ts: "1700000000.000100" }),
+    ) as unknown as typeof fetch;
+
+    const result = await clientWith(fetchImpl).postMessage({
+      channel: "C123",
+      text: "hello",
+    });
+
+    expect(result.ts).toBe("1700000000.000100");
+    const [url, init] = (fetchImpl as unknown as { mock: { calls: FetchArgs[] } })
+      .mock.calls[0]!;
+    expect(url).toBe("https://slack.com/api/chat.postMessage");
+    expect((init.headers as Record<string, string>).Authorization).toBe(
+      "Bearer xoxb-test",
+    );
+    expect(JSON.parse(init.body as string)).toMatchObject({
+      channel: "C123",
+      text: "hello",
+    });
+  });
+
+  it("treats an ok:false body as a failure even though the status is 200", async () => {
+    // Slack answers API errors with HTTP 200 and ok:false. Checking only the
+    // status code means every failure looks like a success.
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ ok: false, error: "not_in_channel" }),
+    ) as unknown as typeof fetch;
+
+    await expect(
+      clientWith(fetchImpl).postMessage({ channel: "C123", text: "hi" }),
+    ).rejects.toThrow(/not_in_channel/);
+  });
+
+  it("surfaces a transport-level failure with the status", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ error: "server_error" }, 503),
+    ) as unknown as typeof fetch;
+
+    await expect(
+      clientWith(fetchImpl).postMessage({ channel: "C123", text: "hi" }),
+    ).rejects.toThrow(/503/);
+  });
+});
+
+describe("updateMessage", () => {
+  it("edits a message in place", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ ok: true, ts: "1700000000.000100" }),
+    ) as unknown as typeof fetch;
+
+    await clientWith(fetchImpl).updateMessage({
+      channel: "C123",
+      ts: "1700000000.000100",
+      text: "decided",
+    });
+
+    const [url, init] = (fetchImpl as unknown as { mock: { calls: FetchArgs[] } })
+      .mock.calls[0]!;
+    expect(url).toBe("https://slack.com/api/chat.update");
+    expect(JSON.parse(init.body as string)).toMatchObject({
+      channel: "C123",
+      ts: "1700000000.000100",
+    });
+  });
+});
+
+describe("uploadImage", () => {
+  it("walks the three-call upload flow in order", async () => {
+    const calls: string[] = [];
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes("getUploadURLExternal")) {
+        return jsonResponse({
+          ok: true,
+          upload_url: "https://files.slack.com/upload/abc",
+          file_id: "F123",
+        });
+      }
+      if (url.includes("files.slack.com/upload")) {
+        return new Response("OK - 12", { status: 200 });
+      }
+      return jsonResponse({ ok: true, files: [{ id: "F123" }] });
+    }) as unknown as typeof fetch;
+
+    const result = await clientWith(fetchImpl).uploadImage({
+      channel: "C123",
+      filename: "HG-002_morning-kitchen_01.jpg",
+      title: "HG-002_morning-kitchen_01.jpg",
+      bytes: Buffer.from("not-really-a-jpeg"),
+    });
+
+    expect(result.fileId).toBe("F123");
+    expect(calls).toEqual([
+      "https://slack.com/api/files.getUploadURLExternal",
+      "https://files.slack.com/upload/abc",
+      "https://slack.com/api/files.completeUploadExternal",
+    ]);
+  });
+
+  it("sends the byte length Slack asks for up front", async () => {
+    const bytes = Buffer.from("twelve bytes");
+    let requestedLength: string | null = null;
+
+    const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("getUploadURLExternal")) {
+        requestedLength = new URLSearchParams(init!.body as string).get("length");
+        return jsonResponse({ ok: true, upload_url: "https://x/u", file_id: "F1" });
+      }
+      if (url === "https://x/u") return new Response("OK", { status: 200 });
+      return jsonResponse({ ok: true, files: [{ id: "F1" }] });
+    }) as unknown as typeof fetch;
+
+    await clientWith(fetchImpl).uploadImage({
+      channel: "C1",
+      filename: "a.jpg",
+      title: "a.jpg",
+      bytes,
+    });
+
+    expect(requestedLength).toBe(String(bytes.byteLength));
+  });
+
+  it("passes blocks and never an initial comment", async () => {
+    // Slack ignores `blocks` outright when `initial_comment` is present, so
+    // sending both would silently drop the buttons.
+    let completeBody: URLSearchParams | null = null;
+    const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("getUploadURLExternal")) {
+        return jsonResponse({ ok: true, upload_url: "https://x/u", file_id: "F1" });
+      }
+      if (url === "https://x/u") return new Response("OK", { status: 200 });
+      completeBody = new URLSearchParams(init!.body as string);
+      return jsonResponse({ ok: true, files: [{ id: "F1" }] });
+    }) as unknown as typeof fetch;
+
+    await clientWith(fetchImpl).uploadImage({
+      channel: "C1",
+      filename: "a.jpg",
+      title: "a.jpg",
+      bytes: Buffer.from("x"),
+      blocks: [{ type: "actions", elements: [] }],
+    });
+
+    expect(completeBody!.get("blocks")).toContain("actions");
+    expect(completeBody!.get("initial_comment")).toBeNull();
+  });
+
+  it("fails loudly if the byte upload is rejected", async () => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("getUploadURLExternal")) {
+        return jsonResponse({ ok: true, upload_url: "https://x/u", file_id: "F1" });
+      }
+      return new Response("nope", { status: 500 });
+    }) as unknown as typeof fetch;
+
+    await expect(
+      clientWith(fetchImpl).uploadImage({
+        channel: "C1",
+        filename: "a.jpg",
+        title: "a.jpg",
+        bytes: Buffer.from("x"),
+      }),
+    ).rejects.toThrow(/500/);
+  });
+});
