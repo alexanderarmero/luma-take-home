@@ -2,6 +2,7 @@ import { serve } from "@hono/node-server";
 import { loadConfig } from "./config/config.js";
 import { createDbBootstrap } from "./db/bootstrap.js";
 import { createPostgresClient } from "./db/postgres.js";
+import { describeDatabaseUrl } from "./db/redact.js";
 import { createApp } from "./slack/app.js";
 
 const config = loadConfig(process.env);
@@ -30,8 +31,15 @@ const app = createApp({
 // Now the health endpoint answers immediately and says what the database is
 // doing, and a private network that is not routable for the first few seconds
 // of a container's life is a retry rather than a crash.
-const server = serve({ fetch: app.fetch, port: config.port }, ({ port }) => {
-  console.log(`[server] listening on :${port}`);
+const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
+  // What was missing while debugging the first deploy: which interface and
+  // port we actually bound, and which database we are dialling. A port that
+  // does not match the platform's routing looks identical to a crash from the
+  // outside, and the logs should be able to tell them apart on their own.
+  console.log(
+    `[server] listening on ${info.address}:${info.port} (${info.family})`,
+  );
+  console.log(`[db] target ${describeDatabaseUrl(config.databaseUrl)}`);
   void dbBootstrap.start();
 });
 
