@@ -1,4 +1,6 @@
 import { Hono } from "hono";
+import type { SqlClient } from "../db/client.js";
+import { buildStatusSummary } from "../status/status.js";
 import { verifySlackSignature } from "./signature.js";
 
 export interface AppDeps {
@@ -10,11 +12,13 @@ export interface AppDeps {
    * acknowledged within three seconds, so no handler may await real work.
    */
   defer: (task: () => Promise<void>) => void;
+  db: SqlClient;
 }
 
 const USAGE = [
   "Commands I know:",
   "• `/luma ping` — check I'm awake",
+  "• `/luma status` — where the latest batch stands",
 ].join("\n");
 
 /** Slack renders this only to the person who typed the command. */
@@ -52,6 +56,9 @@ export function createApp(deps: AppDeps) {
     switch (subcommand) {
       case "ping":
         return c.json(ephemeral("pong — deployed and listening."));
+
+      case "status":
+        return c.json(ephemeral(await buildStatusSummary(deps.db)));
 
       case "slow":
         // Placeholder proving the deferral path: real subcommands that do work

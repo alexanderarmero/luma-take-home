@@ -1,11 +1,23 @@
 import { createHmac } from "node:crypto";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { createBatch } from "../db/repository.js";
+import { createTestDb, type TestDb } from "../db/testing.js";
 import { createApp } from "./app.js";
 
 const SECRET = "test-signing-secret";
 const NOW = 1_700_000_000_000;
 
 let deferred: Array<() => Promise<void>>;
+let db: TestDb;
+
+// One database for the whole suite: most cases here never touch it, and
+// booting Postgres per test would dominate the run time.
+beforeAll(async () => {
+  db = await createTestDb();
+});
+afterAll(async () => {
+  await db?.close();
+});
 
 function app() {
   return createApp({
@@ -14,6 +26,7 @@ function app() {
     defer: (task) => {
       deferred.push(task);
     },
+    db,
   });
 }
 
@@ -115,5 +128,27 @@ describe("POST /slack/commands", () => {
     expect(res.status).toBe(200);
     const payload = (await res.json()) as { text: string };
     expect(payload.text.toLowerCase()).toContain("ping");
+  });
+});
+
+describe("/luma status", () => {
+  it("answers before anything has been uploaded", async () => {
+    const res = await app().request(slashCommand({ text: "status" }));
+    expect(res.status).toBe(200);
+    const payload = (await res.json()) as { text: string };
+    expect(payload.text.toLowerCase()).toContain("no batches");
+  });
+
+  it("reports the latest batch once one exists", async () => {
+    await createBatch(db, { sourceFilename: "catalog.csv" });
+    const res = await app().request(slashCommand({ text: "status" }));
+    const payload = (await res.json()) as { text: string };
+    expect(payload.text).toContain("catalog.csv");
+  });
+
+  it("is listed in the usage text so it is discoverable", async () => {
+    const res = await app().request(slashCommand({ text: "wat" }));
+    const payload = (await res.json()) as { text: string };
+    expect(payload.text).toContain("status");
   });
 });

@@ -1,5 +1,6 @@
 export interface Config {
   port: number;
+  databaseUrl: string;
   slack: {
     signingSecret: string;
     botToken: string;
@@ -12,6 +13,7 @@ export interface Config {
 type Env = Record<string, string | undefined>;
 
 const REQUIRED = [
+  "DATABASE_URL",
   "SLACK_SIGNING_SECRET",
   "SLACK_BOT_TOKEN",
   "SLACK_REVIEW_CHANNEL_ID",
@@ -39,6 +41,7 @@ export function loadConfig(env: Env): Config {
 
   return {
     port,
+    databaseUrl: env.DATABASE_URL!.trim(),
     slack: {
       signingSecret: env.SLACK_SIGNING_SECRET!.trim(),
       botToken: env.SLACK_BOT_TOKEN!.trim(),

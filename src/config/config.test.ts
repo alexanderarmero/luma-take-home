@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { loadConfig } from "./config.js";
 
 const complete = {
+  DATABASE_URL: "postgres://localhost/test",
   SLACK_SIGNING_SECRET: "sig",
   SLACK_BOT_TOKEN: "xoxb-token",
   SLACK_REVIEW_CHANNEL_ID: "C123",
@@ -11,6 +12,7 @@ const complete = {
 describe("loadConfig", () => {
   it("reads the required values from the environment", () => {
     const config = loadConfig(complete);
+    expect(config.databaseUrl).toBe("postgres://localhost/test");
     expect(config.slack.signingSecret).toBe("sig");
     expect(config.slack.botToken).toBe("xoxb-token");
     expect(config.slack.reviewChannelId).toBe("C123");
@@ -29,7 +31,7 @@ describe("loadConfig", () => {
     // Being told about one missing secret at a time turns a single fix into
     // four deploys.
     expect(() => loadConfig({})).toThrowError(
-      /SLACK_SIGNING_SECRET[\s\S]*SLACK_BOT_TOKEN[\s\S]*SLACK_REVIEW_CHANNEL_ID[\s\S]*SLACK_APPROVER_USER_ID/,
+      /DATABASE_URL[\s\S]*SLACK_SIGNING_SECRET[\s\S]*SLACK_BOT_TOKEN[\s\S]*SLACK_REVIEW_CHANNEL_ID[\s\S]*SLACK_APPROVER_USER_ID/,
     );
   });
 
