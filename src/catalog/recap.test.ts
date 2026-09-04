@@ -48,46 +48,95 @@ describe("planBatch — against the real catalog", () => {
 });
 
 describe("buildRecap", () => {
-  it("reports every count a person needs before committing", () => {
+  function recapForRealCatalog(warnings: string[] = []) {
     const parsed = realRows();
-    const text = buildRecap(planBatch(parsed.rows), parsed.warnings, "catalog.csv");
+    return buildRecap(planBatch(parsed.rows), warnings, "catalog.csv");
+  }
+
+  it("reports every count a person needs before committing", () => {
+    const text = recapForRealCatalog();
     expect(text).toContain("catalog.csv");
-    expect(text).toContain("40");
-    expect(text).toContain("16");
-    expect(text).toContain("24");
-    expect(text).toContain("72");
+    expect(text).toContain("40 products");
+    expect(text).toContain("16 have something written");
+    expect(text).toContain("24 have that column blank");
+    expect(text).toContain("72 images");
   });
 
   it("shows the bill before it is incurred", () => {
-    const parsed = realRows();
-    const text = buildRecap(planBatch(parsed.rows), parsed.warnings, "catalog.csv");
-    expect(text).toMatch(/\$5\.\d\d/);
+    expect(recapForRealCatalog()).toMatch(/\$5\.\d\d in total/);
   });
 
   it("says plainly that nothing has been spent yet", () => {
-    const parsed = realRows();
-    const text = buildRecap(planBatch(parsed.rows), parsed.warnings, "catalog.csv");
-    expect(text.toLowerCase()).toContain("nothing has been generated");
-  });
-
-  it("surfaces content warnings without implying failure", () => {
-    const text = buildRecap(
-      planBatch(realRows().rows),
-      ["Row 7: HG-099 has no Photo link — skipped."],
-      "drop.csv",
+    expect(recapForRealCatalog().toLowerCase()).toContain(
+      "nothing has been generated and nothing has been charged yet",
     );
+  });
+
+  it("uses no arrows or shorthand a reader has to interpret", () => {
+    // The relationship between "16 rows" and "48 photos" has to be stated,
+    // not implied by punctuation.
+    const text = recapForRealCatalog();
+    expect(text).not.toContain("→");
+    expect(text).not.toContain("->");
+  });
+
+  it("spells out that a blank shot idea means the original photo, unchanged", () => {
+    const text = recapForRealCatalog().toLowerCase();
+    expect(text).toContain("would not invent anything");
+    expect(text).toContain("existing white-background photo");
+    expect(text).toContain("unchanged");
+  });
+
+  it("says outright that the unchanged photos are free, and why", () => {
+    expect(recapForRealCatalog()).toContain(
+      "they cost nothing because nothing is generated for them",
+    );
+  });
+
+  it("names what the reviewer will actually be doing", () => {
+    const text = recapForRealCatalog();
+    expect(text).toContain("Approve button");
+    expect(text).toContain("Discard button");
+  });
+
+  it("surfaces skipped rows under a heading that says what happened to them", () => {
+    const text = recapForRealCatalog([
+      "Row 7: HG-099 has no Photo link — skipped.",
+    ]);
+    expect(text).toContain("Rows I could not use");
     expect(text).toContain("HG-099");
+    expect(text).toContain("The rest of the file is unaffected");
   });
 
-  it("omits the warnings section when there is nothing to warn about", () => {
-    const text = buildRecap(planBatch(realRows().rows), [], "clean.csv");
-    expect(text.toLowerCase()).not.toContain("worth a look");
+  it("omits the skipped-rows section when nothing was skipped", () => {
+    expect(recapForRealCatalog()).not.toContain("Rows I could not use");
   });
 
-  it("calls out that blank shot ideas become the original photo", () => {
-    // A person reading "24 without" needs to know that is not 24 dropped rows.
-    const parsed = realRows();
-    const text = buildRecap(planBatch(parsed.rows), parsed.warnings, "catalog.csv");
-    expect(text.toLowerCase()).toContain("original photo");
+  it("does not promise styled photos when no row has a shot idea", () => {
+    // The likely shape of next month's drop: a fresh catalog with the Shot
+    // Idea column still empty.
+    const blanksOnly = realRows().rows.map((r) => ({ ...r, shotIdea: null }));
+    const text = buildRecap(planBatch(blanksOnly), [], "drop.csv");
+    expect(text).toContain("No product has a shot idea");
+    expect(text).toContain("Nothing at all");
+    expect(text).not.toMatch(/\$\d/);
+  });
+
+  it("reads correctly for a single product", () => {
+    const one = realRows().rows.filter((r) => r.shotIdea !== null).slice(0, 1);
+    const text = buildRecap(planBatch(one), [], "one.csv");
+    expect(text).toContain("1 product.");
+    expect(text).toContain("1 has something written");
+    // Verbose copy makes clumsy agreement glaring, so it is worth asserting.
+    expect(text).not.toContain("1 products");
+    expect(text).not.toContain("1 have");
+    expect(text).not.toContain("each of the 1");
+  });
+
+  it("reads correctly when a count is zero", () => {
+    const withIdeas = realRows().rows.filter((r) => r.shotIdea !== null);
+    const text = buildRecap(planBatch(withIdeas), [], "all-styled.csv");
+    expect(text).toContain("0 have that column blank");
+    expect(text).not.toContain("0 has");
   });
 });
