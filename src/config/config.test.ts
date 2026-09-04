@@ -3,6 +3,10 @@ import { loadConfig } from "./config.js";
 
 const complete = {
   DATABASE_URL: "postgres://localhost/test",
+  LUMA_AGENTS_API_KEY: "luma-api-x",
+  S3_BUCKET: "styled-shots",
+  S3_ACCESS_KEY_ID: "ak",
+  S3_SECRET_ACCESS_KEY: "sk",
   SLACK_SIGNING_SECRET: "sig",
   SLACK_BOT_TOKEN: "xoxb-token",
   SLACK_REVIEW_CHANNEL_ID: "C123",
@@ -13,6 +17,8 @@ describe("loadConfig", () => {
   it("reads the required values from the environment", () => {
     const config = loadConfig(complete);
     expect(config.databaseUrl).toBe("postgres://localhost/test");
+    expect(config.lumaApiKey).toBe("luma-api-x");
+    expect(config.storage.bucket).toBe("styled-shots");
     expect(config.slack.signingSecret).toBe("sig");
     expect(config.slack.botToken).toBe("xoxb-token");
     expect(config.slack.reviewChannelId).toBe("C123");
@@ -31,7 +37,7 @@ describe("loadConfig", () => {
     // Being told about one missing secret at a time turns a single fix into
     // four deploys.
     expect(() => loadConfig({})).toThrowError(
-      /DATABASE_URL[\s\S]*SLACK_SIGNING_SECRET[\s\S]*SLACK_BOT_TOKEN[\s\S]*SLACK_REVIEW_CHANNEL_ID[\s\S]*SLACK_APPROVER_USER_ID/,
+      /DATABASE_URL[\s\S]*LUMA_AGENTS_API_KEY[\s\S]*S3_BUCKET[\s\S]*SLACK_SIGNING_SECRET[\s\S]*SLACK_APPROVER_USER_ID/,
     );
   });
 
@@ -52,5 +58,18 @@ describe("loadConfig", () => {
     } catch (error) {
       expect((error as Error).message).not.toContain("super-secret-value");
     }
+  });
+
+  it("defaults the storage region to R2's documented value", () => {
+    expect(loadConfig(complete).storage.region).toBe("auto");
+  });
+
+  it("omits the endpoint on AWS and sets it for R2", () => {
+    expect(loadConfig(complete).storage.endpoint).toBeUndefined();
+    const r2 = loadConfig({
+      ...complete,
+      S3_ENDPOINT: "https://abc123.r2.cloudflarestorage.com",
+    });
+    expect(r2.storage.endpoint).toBe("https://abc123.r2.cloudflarestorage.com");
   });
 });

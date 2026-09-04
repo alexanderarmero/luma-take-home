@@ -4,7 +4,9 @@ import { createDbBootstrap } from "./db/bootstrap.js";
 import { createPostgresClient } from "./db/postgres.js";
 import { describeDatabaseUrl } from "./db/redact.js";
 import { createApp } from "./slack/app.js";
+import { createLumaGenerator } from "./generation/generator.js";
 import { createSlackClient } from "./slack/client.js";
+import { createS3ObjectStore } from "./storage/s3.js";
 
 const config = loadConfig(process.env);
 const db = createPostgresClient(config.databaseUrl);
@@ -25,6 +27,8 @@ const app = createApp({
   slack: createSlackClient({ botToken: config.slack.botToken }),
   reviewChannelId: config.slack.reviewChannelId,
   approverUserId: config.slack.approverUserId,
+  generator: createLumaGenerator({ authToken: config.lumaApiKey }),
+  store: createS3ObjectStore(config.storage),
 });
 
 // The HTTP server comes up first, deliberately.

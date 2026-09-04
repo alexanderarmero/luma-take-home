@@ -40,7 +40,8 @@ export function createFakeSlack(): FakeSlack {
     },
     uploadImage: async (input) => {
       fake.uploads.push(input);
-      return { fileId: `F${fake.uploads.length}` };
+      const n = fake.uploads.length;
+      return { fileId: `F${n}`, ts: `170000000${n}.000200` };
     },
     openView: async (input) => {
       fake.views.push(input);

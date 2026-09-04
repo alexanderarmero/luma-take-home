@@ -123,4 +123,13 @@ export const MIGRATIONS: ReadonlyArray<{ name: string; sql: string }> = [
       create index batch_rows_batch_idx on batch_rows (batch_id, row_index);
     `,
   },
+  {
+    name: "0003_image_message_ts",
+    sql: `
+      -- Recorded so a decided image can be rewritten in place. Without it the
+      -- stream is an archive of undifferentiated candidates rather than a
+      -- work queue.
+      alter table images add column message_ts text;
+    `,
+  },
 ];
