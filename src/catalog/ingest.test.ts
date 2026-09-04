@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getBatchRows, getLatestBatch } from "../db/repository.js";
 import type { ImageGenerator } from "../generation/generator.js";
+import { tick } from "../generation/loop.js";
 import { createMemoryStore, type MemoryStore } from "../storage/memory.js";
 import { createTestDb, type TestDb } from "../db/testing.js";
 import { createApp } from "../slack/app.js";
@@ -253,6 +254,27 @@ describe("the Generate button", () => {
     return { res, batchId: batch!.id };
   }
 
+  /** Presses Generate, then lets the background worker run the batch. */
+  async function generateAndRunWorker() {
+    const started = await uploadThenPressGenerate();
+    await drain();
+    await tick(
+      {
+        db,
+        generator,
+        store,
+        slack,
+        channel: "C_REVIEW",
+        model: "uni-1-max",
+        aspectRatio: "1:1",
+        fetch: fetchImage,
+        sleep: async () => {},
+      },
+      { approverUserId: "U_ELLIE" },
+    );
+    return started;
+  }
+
   it("acknowledges before starting any work", async () => {
     const { res } = await uploadThenPressGenerate();
     expect(res.status).toBe(200);
@@ -265,11 +287,12 @@ describe("the Generate button", () => {
     await drain();
     expect(slack.posts[0]!.text).toContain("48 styled photos");
     expect(slack.posts[0]!.text).toContain("24 original photos");
+    // Announced immediately; nothing generated yet.
+    expect(slack.uploads).toHaveLength(0);
   });
 
   it("runs the whole catalog through and posts every image", async () => {
-    await uploadThenPressGenerate();
-    await drain();
+    await generateAndRunWorker();
 
     // 16 shot ideas at 3 candidates each, plus 24 originals passed through.
     expect(slack.uploads).toHaveLength(72);
@@ -279,8 +302,7 @@ describe("the Generate button", () => {
   it("mentions the approver exactly once, at the end", async () => {
     // One ping per batch, not one per image — the whole notification design
     // depends on the stream itself posting quietly.
-    await uploadThenPressGenerate();
-    await drain();
+    await generateAndRunWorker();
 
     const mentions = slack.posts.filter((p) => p.text.includes("<@U_ELLIE>"));
     expect(mentions).toHaveLength(1);
@@ -288,8 +310,7 @@ describe("the Generate button", () => {
   });
 
   it("charges nothing for the products with no shot idea", async () => {
-    await uploadThenPressGenerate();
-    await drain();
+    await generateAndRunWorker();
 
     const originals = slack.uploads.filter((u) => u.filename.endsWith("_original.jpg"));
     expect(originals).toHaveLength(24);
