@@ -104,4 +104,33 @@ describe("S3-compatible store", () => {
     });
     await expect(store.get("images/gone.jpg")).rejects.toThrow(/no object/);
   });
+
+  it("uses virtual-hosted addressing by default, which is what the S3 API expects", async () => {
+    // Forcing path-style whenever an endpoint is present would break Railway
+    // Buckets, which use virtual-hosted URLs — and it would break at request
+    // time, not at configuration time.
+    const store = createS3ObjectStore({
+      bucket: "shots",
+      region: "auto",
+      endpoint: "https://storage.railway.app",
+      accessKeyId: "k",
+      secretAccessKey: "s",
+    });
+    expect(store).toBeDefined();
+  });
+
+  it("still allows path-style for a host that requires it", async () => {
+    const send = vi.fn().mockResolvedValue({});
+    const store = createS3ObjectStore({
+      bucket: "shots",
+      region: "auto",
+      endpoint: "https://example.invalid",
+      forcePathStyle: true,
+      accessKeyId: "k",
+      secretAccessKey: "s",
+      client: { send } as never,
+    });
+    await store.put({ bytes: BYTES, contentType: "image/jpeg", filename: "a.jpg" });
+    expect(send).toHaveBeenCalled();
+  });
 });

@@ -5,8 +5,9 @@ export interface Config {
   storage: {
     bucket: string;
     region: string;
-    /** Set for Cloudflare R2 or any S3-compatible host; omit for AWS itself. */
+    /** Set for Railway Buckets, Cloudflare R2, or any S3-compatible host. */
     endpoint?: string;
+    forcePathStyle?: boolean;
     accessKeyId: string;
     secretAccessKey: string;
   };
@@ -60,10 +61,16 @@ export function loadConfig(env: Env): Config {
     lumaApiKey: env.LUMA_AGENTS_API_KEY!.trim(),
     storage: {
       bucket: env.S3_BUCKET!.trim(),
-      // R2 ignores the region but the SDK insists on one; "auto" is R2's own
-      // documented value and is harmless on AWS if overridden.
+      // Railway and R2 both ignore the region while the SDK insists on one;
+      // "auto" is the documented value for both, and AWS overrides it.
       region: env.S3_REGION?.trim() || "auto",
       ...(endpoint ? { endpoint } : {}),
+      // Off unless asked for: virtual-hosted is the S3 standard and what
+      // Railway Buckets use. Some buckets created before Railway's switch
+      // still need path-style, and their Credentials tab says so.
+      ...(env.S3_FORCE_PATH_STYLE?.trim() === "true"
+        ? { forcePathStyle: true }
+        : {}),
       accessKeyId: env.S3_ACCESS_KEY_ID!.trim(),
       secretAccessKey: env.S3_SECRET_ACCESS_KEY!.trim(),
     },

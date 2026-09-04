@@ -72,4 +72,19 @@ describe("loadConfig", () => {
     });
     expect(r2.storage.endpoint).toBe("https://abc123.r2.cloudflarestorage.com");
   });
+
+  it("does not force path-style addressing by default", () => {
+    // Railway Buckets use virtual-hosted URLs; defaulting this on would break
+    // them at request time rather than at configuration time.
+    const r2 = loadConfig({
+      ...complete,
+      S3_ENDPOINT: "https://storage.railway.app",
+    });
+    expect(r2.storage.forcePathStyle).toBeUndefined();
+  });
+
+  it("allows path-style to be turned on for a host that needs it", () => {
+    const cfg = loadConfig({ ...complete, S3_FORCE_PATH_STYLE: "true" });
+    expect(cfg.storage.forcePathStyle).toBe(true);
+  });
 });

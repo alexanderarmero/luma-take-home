@@ -487,3 +487,43 @@ only as a record of what would have happened.
 Discovering any of them at ticket 07 would have meant rebuilding tickets 05, 07 and 08 on a
 different shape. The cost of finding out was one slash command; the cost of not finding out
 was most of the build.
+
+---
+
+## F11 — Railway Buckets (checked 2026-09-04, before switching storage to it)
+
+`[CONFIRMED — docs.railway.com/storage-buckets]`
+
+**F11.1 — S3-compatible, and works with the standard AWS SDK.** Provisioned inside the
+Railway project, so storage and the service live in one place.
+
+**F11.2 — Credentials arrive as Variable References**, not by hand:
+
+| Railway variable | Ours |
+|---|---|
+| `BUCKET` (display name + hash — the globally unique S3 name) | `S3_BUCKET` |
+| `ENDPOINT` (`https://storage.railway.app`) | `S3_ENDPOINT` |
+| `REGION` (`auto`) | `S3_REGION` |
+| `ACCESS_KEY_ID` / `SECRET_ACCESS_KEY` | `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` |
+
+`RAILWAY_BUCKET_NAME` is **not** the S3 name — the docs call this out explicitly.
+
+**F11.3 — ⚠️ Railway uses virtual-hosted–style URLs, not path-style.** This is the one real
+incompatibility with the code as written for R2, which forced path-style whenever an endpoint
+was configured. **It would have failed at request time rather than at configuration time**,
+which is the expensive kind. URL style is now a setting defaulting to virtual-hosted; buckets
+created before Railway's switch may still need path-style and their Credentials tab says so.
+
+**F11.4 — Buckets are private and public buckets are not supported.** Files are served by
+presigned URL or proxied through a backend. **We already proxy through `/img/:id`**, so this
+constrains nothing — the design happened to land on Railway's recommended pattern already.
+
+**F11.5 — 💰 "Bucket egress is free. Service egress is not."**
+Because we proxy, image bytes travel bucket → service → viewer, and the second leg bills as
+service egress. Presigned URLs would make it free, but they expire, which conflicts with the
+permanent unguessable URL the generated-images CSV needs (D9.1/A6.4). At this volume — a
+handful of CSV link views per batch — the cost is negligible, and Slack holds its own copy of
+every image anyway (D32), so the proxy is not on the hot path for review. **Named rather than
+discovered later.**
+
+**Verdict: compatible.** One code change (URL style), no design change.
