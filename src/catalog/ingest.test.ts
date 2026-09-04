@@ -285,10 +285,24 @@ describe("the Generate button", () => {
   it("announces the run in the team's terms before doing it", async () => {
     await uploadThenPressGenerate();
     await drain();
-    expect(slack.posts[0]!.text).toContain("48 styled photos");
-    expect(slack.posts[0]!.text).toContain("24 original photos");
+
+    const announcement = slack.posts[0]!.text;
+    expect(announcement).toContain("*48* styled photos");
+    expect(announcement).toContain("*24* original photos");
     // Announced immediately; nothing generated yet.
     expect(slack.uploads).toHaveLength(0);
+  });
+
+  it("sets the expectation that photos take time and arrive in sets", async () => {
+    // Without this, silence after pressing Generate reads as a broken system.
+    await uploadThenPressGenerate();
+    await drain();
+
+    const announcement = slack.posts[0]!.text;
+    expect(announcement).toContain("Nothing will appear straight away");
+    expect(announcement).toContain("product by product");
+    expect(announcement).toMatch(/about \d+ minutes/);
+    expect(announcement).toContain("I'll mention you");
   });
 
   it("runs the whole catalog through and posts every image", async () => {

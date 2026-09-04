@@ -361,3 +361,137 @@ describe("polling a generation that is not instant", () => {
     expect(sleeps.every((ms) => ms >= 1000)).toBe(true);
   });
 });
+
+describe("posting order", () => {
+  /** Completes generations in a deliberately jumbled order. */
+  function jumbledGenerator(completeAfter: Record<string, number>): ImageGenerator {
+    const polls = new Map<string, number>();
+    return {
+      submit: async (input) => ({ generationId: input.userId, rateLimit: {} }),
+      poll: async (id) => {
+        const n = (polls.get(id) ?? 0) + 1;
+        polls.set(id, n);
+        const threshold = completeAfter[id] ?? 1;
+        return n >= threshold
+          ? ({ state: "completed", outputUrl: OUTPUT } as const)
+          : ({ state: "pending" } as const);
+      },
+    };
+  }
+
+  async function seedTwoProducts() {
+    const batch = await seed([
+      { sku: "HG-002", shotIdea: "morning kitchen" },
+      { sku: "HG-005", shotIdea: "dinner table" },
+    ]);
+    await startGeneration(db, batch.id);
+    return batch;
+  }
+
+  it("keeps a product's candidates together even when they finish out of order", async () => {
+    // The reported symptom: candidates scattered through the stream because
+    // whichever generation finished first was posted first.
+    const batch = await seedTwoProducts();
+
+    const { rows } = await db.query<{ image_id: string; sku: string; slot: number }>(
+      `select j.image_id, i.sku, i.slot from image_jobs j
+         join images i on i.id = j.image_id order by i.sku, i.slot`,
+    );
+    // Make the last candidate of the first product the slowest of all.
+    const completeAfter: Record<string, number> = {};
+    rows.forEach((r, index) => {
+      completeAfter[r.image_id] = r.sku === "HG-002" && r.slot === 3 ? 6 : 1;
+    });
+
+    await drain(
+      { ...deps(jumbledGenerator(completeAfter)), sleep: async () => {} },
+      { batchId: batch.id },
+    );
+
+    const posted = slack.uploads.map((u) => u.filename);
+    const skuOrder = posted.map((f) => f.slice(0, 6));
+    // Each product's three appear consecutively, never interleaved.
+    expect(new Set(skuOrder.slice(0, 3)).size).toBe(1);
+    expect(new Set(skuOrder.slice(3, 6)).size).toBe(1);
+  });
+
+  it("posts a product's candidates in slot order", async () => {
+    const batch = await seedTwoProducts();
+    await drain({ ...deps(), sleep: async () => {} }, { batchId: batch.id });
+
+    const forProduct = slack.uploads
+      .map((u) => u.filename)
+      .filter((f) => f.startsWith("HG-002"));
+    expect(forProduct).toEqual([
+      "HG-002_morning-kitchen_01.jpg",
+      "HG-002_morning-kitchen_02.jpg",
+      "HG-002_morning-kitchen_03.jpg",
+    ]);
+  });
+
+  it("holds a product back until every candidate has settled", async () => {
+    const batch = await seed([{ sku: "HG-002", shotIdea: "kitchen" }]);
+    await startGeneration(db, batch.id);
+
+    const { rows } = await db.query<{ image_id: string; slot: number }>(
+      `select j.image_id, i.slot from image_jobs j
+         join images i on i.id = j.image_id order by i.slot`,
+    );
+    const stalled = rows[2]!.image_id;
+
+    // Two finish immediately, one never does.
+    await drain(
+      {
+        ...deps(
+          jumbledGenerator({
+            [rows[0]!.image_id]: 1,
+            [rows[1]!.image_id]: 1,
+            [stalled]: 9999,
+          }),
+        ),
+        sleep: async () => {},
+      },
+      { batchId: batch.id, maxSteps: 30 },
+    );
+
+    // Nothing posted: the set is incomplete, so it waits rather than
+    // dribbling out.
+    expect(slack.uploads).toHaveLength(0);
+  });
+
+  it("does not let one failed candidate hold its siblings hostage", async () => {
+    // Promise.allSettled, not Promise.all: a moderated candidate is finished,
+    // just unsuccessfully, and the other two should still reach the reviewer.
+    const batch = await seed([{ sku: "HG-002", shotIdea: "kitchen" }]);
+    await startGeneration(db, batch.id);
+
+    const { rows } = await db.query<{ image_id: string; slot: number }>(
+      `select j.image_id, i.slot from image_jobs j
+         join images i on i.id = j.image_id order by i.slot`,
+    );
+    const doomed = rows[1]!.image_id;
+
+    const generatorWithOneRefusal: ImageGenerator = {
+      submit: async (input) => ({ generationId: input.userId, rateLimit: {} }),
+      poll: async (id) =>
+        id === doomed
+          ? ({
+              state: "failed",
+              failureCode: "content_moderated",
+              failureReason: "policy",
+              retryable: false,
+            } as const)
+          : ({ state: "completed", outputUrl: OUTPUT } as const),
+    };
+
+    await drain(
+      { ...deps(generatorWithOneRefusal), sleep: async () => {} },
+      { batchId: batch.id },
+    );
+
+    expect(slack.uploads.map((u) => u.filename)).toEqual([
+      "HG-002_kitchen_01.jpg",
+      "HG-002_kitchen_03.jpg",
+    ]);
+  });
+});
