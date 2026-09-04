@@ -200,9 +200,10 @@ D3 over a radio-button contact sheet.
 Implied by her described workflow. Justifies both in-place updates (T3.1) and `/status` as
 a re-entry point rather than a reporting feature.
 
-**A4.3 — Channel notification preferences can be set to mentions-only.** `HELD — VERIFY`
-Load-bearing for the T3.4 mitigation. If it turns out members can't be defaulted to
-mentions-only, the flood risk needs a different answer.
+**A4.3 — Channel notification preferences can be set to mentions-only.** `CONFIRMED`
+Load-bearing for the T3.4 mitigation. **Verified 2026-09-04 (F4.12):** a muted channel still
+badges on a direct mention, so the stream can post quietly and one summary mention reaches
+the reviewer. The flood mitigation works as designed.
 
 **A4.4 — The image label and the export filename are the same string.** `HELD`
 Proceeding on this unless overruled. It collapses a translation step where the wrong file
@@ -235,9 +236,11 @@ over the batch-parent design** (see Road not taken), so it is worth naming: if d
 volume turns out to be near-zero in practice, the tidier rejected design becomes correct
 and the flood was a price paid for nothing.
 
-**A4.6 — Ellie will not mute the channel, or will still receive @-mentions if she does.** `HELD — VERIFY`
-Depends on F4.12. See T3.6. Unverified and unobservable — we cannot detect a mute. The
-proxy signal is time-to-first-decision stretching on a batch.
+**A4.6 — Ellie will not mute the channel, or will still receive @-mentions if she does.** `CONFIRMED (second clause)`
+Depends on F4.12, **verified 2026-09-04**: a muted channel still badges on a direct mention,
+so muting no longer costs push. We still cannot *detect* a mute, but it no longer matters —
+the escape valve is safe to use. The proxy signal for a broken notification path remains
+time-to-first-decision stretching on a batch.
 
 ---
 
@@ -615,9 +618,9 @@ The residual loss is F7.5's orphaned generation at $0.1030. **Alexander's framin
 the 1-hour window only matters if the system is broken *and* the outage outlasts it — an edge
 case worth knowing about, not designing around.**
 
-**A12.3 — Slack will accept buttons on a file-share message.** `HELD — UNVERIFIED, LOAD-BEARING`
-F8.2. D3.2 and D32 both depend on it. Fallbacks exist (F8.2) but each costs a decision
-already made. **Day-one verification.**
+**A12.3 — Slack will accept buttons on a file-share message.** `CONFIRMED`
+F8.2. D3.2 and D32 both depended on it. **Verified 2026-09-04** with a real catalog photo.
+Neither fallback is needed.
 
 **A12.4 — Serving images through the app is acceptable bandwidth-wise.** `HELD`
 D31.4 routes image bytes through the always-on service rather than a public bucket or CDN, in
@@ -671,10 +674,9 @@ whether anyone uses it. If not, the sheet stays broken and the fix was theatre.
 OQ-19, OQ-1, OQ-3, OQ-6, OQ-11, OQ-18, OQ-5, OQ-12.
 
 **Remaining — day-one verifications (facts, not decisions):**
-- **OQ-7 / F4.12** — does a muted channel still badge on @-mention? Decides whether T3.4's
-  flood mitigation works at all.
-- **F4.5** — do buttons work in a posting-restricted channel? Decides D2.1.
-- **OQ-24 / F8.2** — do buttons work on a file-share message? Decides D3.2 + D32 together.
+- **~~OQ-7 / F4.12~~** — **SETTLED 2026-09-04: a muted channel still badges on @-mention.** T3.4's flood mitigation works.
+- **~~F4.5~~** — **SETTLED 2026-09-04: buttons work in a posting-restricted channel.** D2.1 stands.
+- **~~OQ-24 / F8.2~~** — **SETTLED 2026-09-04: blocks render on a file-share message.** D3.2 + D32 stand.
 
 **Remaining — deferred by choice, with reasoning recorded:**
 - **OQ-8** — `/status` filtering at scale. Deferred with `/status` itself (D33).
