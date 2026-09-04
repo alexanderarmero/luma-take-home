@@ -9,7 +9,13 @@ import {
   UPLOAD_CALLBACK_ID,
 } from "../catalog/ingest.js";
 import type { SqlClient } from "../db/client.js";
+import { getImageByObjectKey } from "../db/repository.js";
+import type { ImageGenerator } from "../generation/generator.js";
+import { startGeneration } from "../generation/start.js";
+import { drain } from "../generation/worker.js";
+import type { ImageModel } from "../pricing.js";
 import { buildStatusSummary } from "../status/status.js";
+import type { ObjectStore } from "../storage/store.js";
 import type { SlackClient } from "./client.js";
 import { verifySlackSignature } from "./signature.js";
 import {
@@ -33,6 +39,12 @@ export interface AppDeps {
   slack?: SlackClient;
   reviewChannelId?: string;
   approverUserId?: string;
+  generator?: ImageGenerator;
+  store?: ObjectStore;
+  model?: ImageModel;
+  aspectRatio?: string;
+  /** Injected so the pipeline can be driven end to end without a network. */
+  fetch?: typeof fetch;
 }
 
 const USAGE = [
@@ -141,6 +153,34 @@ export function createApp(deps: AppDeps) {
     }
   });
 
+  /**
+   * Serves a stored image.
+   *
+   * The object key is random so the URL is unguessable, while the meaningful
+   * name is attached here as a content disposition — the two properties are
+   * different fields rather than a compromise between them.
+   */
+  app.get("/img/:id", async (c) => {
+    if (!deps.store) return c.text("storage not configured", 503);
+
+    const id = c.req.param("id").replace(/\.jpg$/, "");
+    const objectKey = `images/${id}.jpg`;
+
+    const image = await getImageByObjectKey(deps.db, objectKey);
+    if (!image) return c.text("not found", 404);
+
+    try {
+      const object = await deps.store.get(objectKey);
+      return c.body(new Uint8Array(object.bytes), 200, {
+        "content-type": object.contentType,
+        "content-disposition": `inline; filename="${image.filename}"`,
+        "cache-control": "public, max-age=31536000, immutable",
+      });
+    } catch {
+      return c.text("not found", 404);
+    }
+  });
+
   app.post("/slack/interactions", async (c) => {
     const raw = await c.req.text();
 
@@ -204,18 +244,54 @@ export function createApp(deps: AppDeps) {
     const ts = payload.message?.ts;
     const userId = payload.user?.id;
 
-    if (action?.action_id === GENERATE_ACTION_ID && deps.slack && channel && ts) {
-      const slack = deps.slack;
-      const batchId = action.value;
+    if (action?.action_id === GENERATE_ACTION_ID && deps.slack && channel) {
+      const { slack, generator, store, reviewChannelId } = deps;
+      const batchId = Number(action.value);
+
+      if (!generator || !store || !reviewChannelId) {
+        deps.defer(async () => {
+          await slack.postMessage({
+            channel,
+            text: "Generation isn't configured on this instance.",
+            ...(ts ? { threadTs: ts } : {}),
+          });
+        });
+        return c.body(null, 200);
+      }
+
       deps.defer(async () => {
+        const counts = await startGeneration(deps.db, batchId);
         await slack.postMessage({
           channel,
           text:
-            `Batch #${batchId}: generation is the next piece of work — the ` +
-            `catalog is stored and ready for it.`,
-          threadTs: ts,
+            `Starting batch #${batchId}. Generating ${counts.styled} styled ` +
+            `photos and copying ${counts.passThrough} original photos across. ` +
+            `I'll post each one here as it's ready.`,
+        });
+
+        await drain(
+          {
+            db: deps.db,
+            generator,
+            store,
+            slack,
+            channel: reviewChannelId,
+            model: deps.model ?? "uni-1-max",
+            aspectRatio: deps.aspectRatio ?? "1:1",
+            ...(deps.fetch ? { fetch: deps.fetch } : {}),
+            log: (message) => console.log(message),
+          },
+          { batchId },
+        );
+
+        await slack.postMessage({
+          channel,
+          text:
+            `<@${deps.approverUserId}> batch #${batchId} is ready for review — ` +
+            `everything above needs an Approve or a Discard.`,
         });
       });
+
       return c.body(null, 200);
     }
 

@@ -24,17 +24,17 @@ orphans one paid generation, which is the safe direction to fail.
 
 **Blocked by:** 02, 03, 04
 
-**Status:** ready-for-agent
+**Status:** done (2026-09-04)
 
-- [ ] Pressing Generate creates a job row per candidate image, committed before any submission
-- [ ] The generation request uses image editing with the product's own photo as the source, so the real product is preserved
-- [ ] The job is polled until it reaches a terminal state, at a cadence the provider documents as safe
-- [ ] On completion the bytes are downloaded, checksummed, and stored under a random object key
-- [ ] The meaningful filename is carried as a content disposition rather than encoded in the object key, so the URL is unguessable and the downloaded file is still named correctly
-- [ ] The image is posted to the review channel with its filename and Approve / Discard controls
-- [ ] Bytes are never re-encoded between download and post
-- [ ] Retryable failures are retried with backoff; terminal failures stop and are surfaced rather than retried
-- [ ] A refusal is correctly identified as either a per-minute limit or a concurrency limit, and honours the wait the provider asks for
-- [ ] Killing the service mid-flight and restarting it resumes the job from its last committed stage
-- [ ] An expired output link is recovered by re-polling rather than treated as a lost image
-- [ ] Tests drive the flow through the real inbound entry points with the external collaborators substituted at one composition root, against a real database
+- [x] Pressing Generate creates a job row per candidate image, committed before any submission
+- [x] The generation request uses image editing with the product's own photo as the source, so the real product is preserved
+- [x] The job is polled until it reaches a terminal state, at a cadence the provider documents as safe
+- [x] On completion the bytes are downloaded, checksummed, and stored under a random object key
+- [x] The meaningful filename is carried as a content disposition rather than encoded in the object key, so the URL is unguessable and the downloaded file is still named correctly
+- [x] The image is posted to the review channel with its filename and Approve / Discard controls
+- [x] Bytes are never re-encoded between download and post
+- [x] Retryable failures are retried with backoff; terminal failures stop and are surfaced rather than retried
+- [x] A refusal is correctly identified as either a per-minute limit or a concurrency limit, and honours the wait the provider asks for
+- [x] Killing the service mid-flight and restarting it resumes the job from its last committed stage
+- [x] An expired output link is recovered by re-polling rather than treated as a lost image
+- [x] Tests drive the flow through the real inbound entry points with the external collaborators substituted at one composition root, against a real database

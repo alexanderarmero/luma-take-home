@@ -307,3 +307,163 @@ export async function getBatchRows(
     shotIdea: r.shot_idea,
   }));
 }
+
+export type JobState =
+  | "pending_submit"
+  | "pending_fetch"
+  | "submitted"
+  | "completed"
+  | "stored"
+  | "posted"
+  | "failed";
+
+export interface PipelineJob {
+  imageId: string;
+  batchId: number;
+  state: JobState;
+  generationId: string | null;
+  attempts: number;
+  sku: string;
+  slot: number;
+  filename: string;
+  prompt: string | null;
+  kind: ImageKind;
+  objectKey: string | null;
+  /** The product's own white-background photo, from the ingested catalog. */
+  sourceUrl: string;
+}
+
+/**
+ * The next job needing work.
+ *
+ * Single-worker by design (see the deployment assumption): there is no
+ * `for update skip locked` here, so a second concurrent worker would
+ * double-execute. If the service is ever scaled past one instance, that lock
+ * has to arrive with it.
+ */
+export async function claimNextJob(
+  db: SqlClient,
+  batchId?: number,
+): Promise<PipelineJob | null> {
+  const { rows } = await db.query<{
+    image_id: string;
+    batch_id: string;
+    state: JobState;
+    generation_id: string | null;
+    attempts: number;
+    sku: string;
+    slot: number;
+    filename: string;
+    prompt: string | null;
+    kind: ImageKind;
+    object_key: string | null;
+    photo_url: string;
+  }>(
+    `select j.image_id, j.batch_id, j.state, j.generation_id, j.attempts,
+            i.sku, i.slot, i.filename, i.prompt, i.kind, i.object_key,
+            r.photo_url
+       from image_jobs j
+       join images i     on i.id = j.image_id
+       join batch_rows r on r.batch_id = i.batch_id and r.sku = i.sku
+      where j.state not in ('posted', 'failed')
+        ${batchId === undefined ? "" : "and j.batch_id = $1"}
+      order by i.sku asc, i.slot asc
+      limit 1`,
+    batchId === undefined ? [] : [batchId],
+  );
+
+  const row = rows[0];
+  if (!row) return null;
+
+  return {
+    imageId: row.image_id,
+    batchId: Number(row.batch_id),
+    state: row.state,
+    generationId: row.generation_id,
+    attempts: row.attempts,
+    sku: row.sku,
+    slot: row.slot,
+    filename: row.filename,
+    prompt: row.prompt,
+    kind: row.kind,
+    objectKey: row.object_key,
+    sourceUrl: row.photo_url,
+  };
+}
+
+export async function setJobState(
+  db: SqlClient,
+  imageId: string,
+  state: JobState,
+  extra: {
+    generationId?: string;
+    failureCode?: string | null;
+    lastError?: string | null;
+    incrementAttempts?: boolean;
+  } = {},
+): Promise<void> {
+  await db.query(
+    `update image_jobs
+        set state = $2,
+            generation_id = coalesce($3, generation_id),
+            failure_code  = $4,
+            last_error    = $5,
+            attempts      = attempts + $6,
+            updated_at    = now()
+      where image_id = $1`,
+    [
+      imageId,
+      state,
+      extra.generationId ?? null,
+      extra.failureCode ?? null,
+      extra.lastError ?? null,
+      extra.incrementAttempts ? 1 : 0,
+    ],
+  );
+}
+
+/** Records the stored object alongside the state change, in one transaction. */
+export async function markImageStored(
+  db: SqlClient,
+  imageId: string,
+  stored: { objectKey: string; checksum: string },
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx.query(
+      `update images set object_key = $2, checksum = $3 where id = $1`,
+      [imageId, stored.objectKey, stored.checksum],
+    );
+    await tx.query(
+      `update image_jobs set state = 'stored', updated_at = now() where image_id = $1`,
+      [imageId],
+    );
+  });
+}
+
+export async function markImagePosted(
+  db: SqlClient,
+  imageId: string,
+  messageTs: string,
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx.query(`update images set message_ts = $2 where id = $1`, [
+      imageId,
+      messageTs,
+    ]);
+    await tx.query(
+      `update image_jobs set state = 'posted', updated_at = now() where image_id = $1`,
+      [imageId],
+    );
+  });
+}
+
+export async function getImageByObjectKey(
+  db: SqlClient,
+  objectKey: string,
+): Promise<{ id: string; filename: string } | null> {
+  const { rows } = await db.query<{ id: string; filename: string }>(
+    `select id, filename from images where object_key = $1`,
+    [objectKey],
+  );
+  return rows[0] ?? null;
+}

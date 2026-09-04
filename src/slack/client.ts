@@ -34,7 +34,7 @@ export interface UploadImageInput {
 export interface SlackClient {
   postMessage(input: PostMessageInput): Promise<{ ts: string }>;
   updateMessage(input: UpdateMessageInput): Promise<void>;
-  uploadImage(input: UploadImageInput): Promise<{ fileId: string }>;
+  uploadImage(input: UploadImageInput): Promise<{ fileId: string; ts?: string }>;
   openView(input: { triggerId: string; view: Record<string, unknown> }): Promise<void>;
   /** Fetches a file Slack is hosting privately. Returns its text. */
   downloadFile(urlPrivate: string): Promise<string>;
@@ -142,8 +142,14 @@ export function createSlackClient(options: SlackClientOptions): SlackClient {
       if (blocks) form.set("blocks", JSON.stringify(blocks));
       if (threadTs) form.set("thread_ts", threadTs);
 
-      await callForm("files.completeUploadExternal", form);
-      return { fileId };
+      const completed = await callForm("files.completeUploadExternal", form);
+
+      // The share timestamp is what lets the message be rewritten in place
+      // once a decision is made. Slack nests it under the file's shares, and
+      // the shape varies by channel visibility, so it is read defensively —
+      // a missing ts is recoverable, a crash here is not.
+      const ts = extractShareTs(completed, channel);
+      return ts === undefined ? { fileId } : { fileId, ts };
     },
 
     async openView({ triggerId, view }) {
@@ -175,4 +181,21 @@ export function createSlackClient(options: SlackClientOptions): SlackClient {
       return text;
     },
   };
+}
+
+function extractShareTs(
+  body: Record<string, unknown>,
+  channel: string,
+): string | undefined {
+  const files = body.files as Array<Record<string, unknown>> | undefined;
+  const shares = files?.[0]?.shares as
+    | Record<string, Record<string, Array<{ ts?: string }>>>
+    | undefined;
+  if (!shares) return undefined;
+
+  for (const visibility of Object.values(shares)) {
+    const entry = visibility?.[channel]?.[0]?.ts;
+    if (entry) return entry;
+  }
+  return undefined;
 }

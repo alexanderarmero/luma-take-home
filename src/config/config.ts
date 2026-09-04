@@ -1,6 +1,15 @@
 export interface Config {
   port: number;
   databaseUrl: string;
+  lumaApiKey: string;
+  storage: {
+    bucket: string;
+    region: string;
+    /** Set for Cloudflare R2 or any S3-compatible host; omit for AWS itself. */
+    endpoint?: string;
+    accessKeyId: string;
+    secretAccessKey: string;
+  };
   slack: {
     signingSecret: string;
     botToken: string;
@@ -14,6 +23,10 @@ type Env = Record<string, string | undefined>;
 
 const REQUIRED = [
   "DATABASE_URL",
+  "LUMA_AGENTS_API_KEY",
+  "S3_BUCKET",
+  "S3_ACCESS_KEY_ID",
+  "S3_SECRET_ACCESS_KEY",
   "SLACK_SIGNING_SECRET",
   "SLACK_BOT_TOKEN",
   "SLACK_REVIEW_CHANNEL_ID",
@@ -39,9 +52,21 @@ export function loadConfig(env: Env): Config {
 
   const port = parsePort(env.PORT);
 
+  const endpoint = env.S3_ENDPOINT?.trim();
+
   return {
     port,
     databaseUrl: env.DATABASE_URL!.trim(),
+    lumaApiKey: env.LUMA_AGENTS_API_KEY!.trim(),
+    storage: {
+      bucket: env.S3_BUCKET!.trim(),
+      // R2 ignores the region but the SDK insists on one; "auto" is R2's own
+      // documented value and is harmless on AWS if overridden.
+      region: env.S3_REGION?.trim() || "auto",
+      ...(endpoint ? { endpoint } : {}),
+      accessKeyId: env.S3_ACCESS_KEY_ID!.trim(),
+      secretAccessKey: env.S3_SECRET_ACCESS_KEY!.trim(),
+    },
     slack: {
       signingSecret: env.SLACK_SIGNING_SECRET!.trim(),
       botToken: env.SLACK_BOT_TOKEN!.trim(),

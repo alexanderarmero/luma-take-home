@@ -2,6 +2,8 @@ import { createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getBatchRows, getLatestBatch } from "../db/repository.js";
+import type { ImageGenerator } from "../generation/generator.js";
+import { createMemoryStore, type MemoryStore } from "../storage/memory.js";
 import { createTestDb, type TestDb } from "../db/testing.js";
 import { createApp } from "../slack/app.js";
 import { createFakeSlack, type FakeSlack } from "../slack/testing.js";
@@ -14,11 +16,24 @@ const REAL_CATALOG = readFileSync("data/catalog.csv", "utf8");
 
 let db: TestDb;
 let slack: FakeSlack;
+let store: MemoryStore;
 let deferred: Array<() => Promise<void>>;
+
+const generator: ImageGenerator = {
+  submit: async () => ({ generationId: "gen-1", rateLimit: {} }),
+  poll: async () => ({ state: "completed", outputUrl: "https://luma/out.jpg" }),
+};
+
+const fetchImage = (async () =>
+  new Response(Buffer.from("jpeg"), {
+    status: 200,
+    headers: { "content-type": "image/jpeg" },
+  })) as unknown as typeof fetch;
 
 beforeEach(async () => {
   db = await createTestDb();
   slack = createFakeSlack();
+  store = createMemoryStore();
   deferred = [];
 });
 afterEach(async () => {
@@ -36,6 +51,11 @@ function app() {
     slack,
     reviewChannelId: "C_REVIEW",
     approverUserId: "U_ELLIE",
+    generator,
+    store,
+    model: "uni-1-max",
+    aspectRatio: "1:1",
+    fetch: fetchImage,
   });
 }
 
@@ -207,13 +227,20 @@ describe("submitting something unusable", () => {
 });
 
 describe("the Generate button", () => {
-  it("answers in-thread rather than doing nothing", async () => {
+  async function uploadThenPressGenerate() {
+    slack.files.set(FILE_URL, REAL_CATALOG);
+    await app().request(viewSubmission());
+    await drain();
+
+    const batch = await getLatestBatch(db);
+    slack.posts.length = 0;
+
     const payload = {
       type: "block_actions",
       user: { id: "U_ELLIE" },
       channel: { id: "C_REVIEW" },
       message: { ts: "1700000000.000100" },
-      actions: [{ action_id: GENERATE_ACTION_ID, value: "7" }],
+      actions: [{ action_id: GENERATE_ACTION_ID, value: String(batch!.id) }],
     };
     const body = `payload=${encodeURIComponent(JSON.stringify(payload))}`;
     const res = await app().request(
@@ -223,10 +250,48 @@ describe("the Generate button", () => {
         body,
       }),
     );
+    return { res, batchId: batch!.id };
+  }
 
+  it("acknowledges before starting any work", async () => {
+    const { res } = await uploadThenPressGenerate();
     expect(res.status).toBe(200);
+    expect(slack.posts).toHaveLength(0);
+    expect(slack.uploads).toHaveLength(0);
+  });
+
+  it("announces the run in the team's terms before doing it", async () => {
+    await uploadThenPressGenerate();
     await drain();
-    expect(slack.posts[0]!.threadTs).toBe("1700000000.000100");
-    expect(slack.posts[0]!.text).toContain("#7");
+    expect(slack.posts[0]!.text).toContain("48 styled photos");
+    expect(slack.posts[0]!.text).toContain("24 original photos");
+  });
+
+  it("runs the whole catalog through and posts every image", async () => {
+    await uploadThenPressGenerate();
+    await drain();
+
+    // 16 shot ideas at 3 candidates each, plus 24 originals passed through.
+    expect(slack.uploads).toHaveLength(72);
+    expect(store.objects.size).toBe(72);
+  });
+
+  it("mentions the approver exactly once, at the end", async () => {
+    // One ping per batch, not one per image — the whole notification design
+    // depends on the stream itself posting quietly.
+    await uploadThenPressGenerate();
+    await drain();
+
+    const mentions = slack.posts.filter((p) => p.text.includes("<@U_ELLIE>"));
+    expect(mentions).toHaveLength(1);
+    expect(slack.posts.at(-1)!.text).toContain("Approve or a Discard");
+  });
+
+  it("charges nothing for the products with no shot idea", async () => {
+    await uploadThenPressGenerate();
+    await drain();
+
+    const originals = slack.uploads.filter((u) => u.filename.endsWith("_original.jpg"));
+    expect(originals).toHaveLength(24);
   });
 });
