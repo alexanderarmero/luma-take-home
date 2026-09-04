@@ -3,13 +3,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createBatch } from "../db/repository.js";
 import { createTestDb, type TestDb } from "../db/testing.js";
 import { createApp } from "./app.js";
-import type { SlackClient } from "./client.js";
+import { createFakeSlack } from "./testing.js";
 
-const fakeSlack: SlackClient = {
-  postMessage: async () => ({ ts: "1700000000.000001" }),
-  updateMessage: async () => {},
-  uploadImage: async () => ({ fileId: "F1" }),
-};
+const fakeSlack = createFakeSlack();
 
 const SECRET = "test-signing-secret";
 const NOW = 1_700_000_000_000;

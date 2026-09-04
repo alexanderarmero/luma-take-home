@@ -35,6 +35,9 @@ export interface SlackClient {
   postMessage(input: PostMessageInput): Promise<{ ts: string }>;
   updateMessage(input: UpdateMessageInput): Promise<void>;
   uploadImage(input: UploadImageInput): Promise<{ fileId: string }>;
+  openView(input: { triggerId: string; view: Record<string, unknown> }): Promise<void>;
+  /** Fetches a file Slack is hosting privately. Returns its text. */
+  downloadFile(urlPrivate: string): Promise<string>;
 }
 
 export interface SlackClientOptions {
@@ -141,6 +144,35 @@ export function createSlackClient(options: SlackClientOptions): SlackClient {
 
       await callForm("files.completeUploadExternal", form);
       return { fileId };
+    },
+
+    async openView({ triggerId, view }) {
+      await callJson("views.open", { trigger_id: triggerId, view });
+    },
+
+    /**
+     * Files uploaded through a modal are private to the workspace, so the
+     * request must carry the bot token. Without it Slack answers 200 with an
+     * HTML sign-in page rather than an error — which would surface much later
+     * as a baffling parse failure naming HTML as the CSV header.
+     */
+    async downloadFile(urlPrivate) {
+      const response = await doFetch(urlPrivate, { headers: authHeader });
+      if (!response.ok) {
+        throw new Error(`Slack file download failed: HTTP ${response.status}`);
+      }
+
+      const contentType = response.headers.get("content-type") ?? "";
+      const text = await response.text();
+
+      if (contentType.includes("text/html") || /^\s*<(!doctype|html)/i.test(text)) {
+        throw new Error(
+          "The file could not be downloaded from Slack — got a sign-in page " +
+            "instead of the file. The bot token may be missing the files:read scope.",
+        );
+      }
+
+      return text;
     },
   };
 }

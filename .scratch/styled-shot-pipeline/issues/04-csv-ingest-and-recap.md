@@ -10,14 +10,14 @@ burning budget on work that will be rejected: not a smaller bill, but seeing the
 
 **Blocked by:** 01, 03
 
-**Status:** ready-for-agent
+**Status:** done (2026-09-04)
 
-- [ ] A slash command opens a modal carrying instructions and a file input restricted to CSV
-- [ ] The modal opens immediately on the command, before any validation work
-- [ ] The uploaded file is parsed and a batch is created with an identifier at upload time
-- [ ] Structural problems are rejected with a message naming what was expected, what was found, and what to change — readable by someone who is not an engineer
-- [ ] Content quirks (a blank cell, an unusual price format, an unparseable note) are reported and accepted, not rejected
-- [ ] The recap reports total rows, rows with a Shot Idea, rows without, the resulting image count, and the estimated cost
-- [ ] The recap carries a button that starts generation
-- [ ] Uploading makes zero generation calls and incurs zero cost
-- [ ] The CSV never appears in the review channel
+- [x] A slash command opens a modal carrying instructions and a file input restricted to CSV
+- [x] The modal opens immediately on the command, before any validation work
+- [x] The uploaded file is parsed and a batch is created with an identifier at upload time
+- [x] Structural problems are rejected with a message naming what was expected, what was found, and what to change — readable by someone who is not an engineer
+- [x] Content quirks (a blank cell, an unusual price format, an unparseable note) are reported and accepted, not rejected
+- [x] The recap reports total rows, rows with a Shot Idea, rows without, the resulting image count, and the estimated cost
+- [x] The recap carries a button that starts generation
+- [x] Uploading makes zero generation calls and incurs zero cost
+- [x] The CSV never appears in the review channel

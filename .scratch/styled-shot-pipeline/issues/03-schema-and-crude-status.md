@@ -11,13 +11,13 @@ needs while the pipeline is being built.
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** done (2026-09-03)
 
-- [ ] Batches are recorded with an incrementing integer identifier assigned at upload time
-- [ ] A separate pointer records the latest delivered batch, distinct from the highest batch identifier
-- [ ] Images are recorded with no status column on them
-- [ ] Decision state is modelled as membership in an approved relation and a discarded relation — approved means present in one, discarded means present in the other, pending means present in neither
-- [ ] An append-only event relation records every action with the acting user and a timestamp, and nothing operational reads it
-- [ ] A job relation carries per-image pipeline state, distinct from decision state
-- [ ] A status slash command returns counts grouped by state and behaves correctly on an empty system
-- [ ] Schema changes are applied by a repeatable migration, not by hand
+- [x] Batches are recorded with an incrementing integer identifier assigned at upload time
+- [x] A separate pointer records the latest delivered batch, distinct from the highest batch identifier
+- [x] Images are recorded with no status column on them
+- [x] Decision state is modelled as membership in an approved relation and a discarded relation — approved means present in one, discarded means present in the other, pending means present in neither
+- [x] An append-only event relation records every action with the acting user and a timestamp, and nothing operational reads it
+- [x] A job relation carries per-image pipeline state, distinct from decision state
+- [x] A status slash command returns counts grouped by state and behaves correctly on an empty system
+- [x] Schema changes are applied by a repeatable migration, not by hand

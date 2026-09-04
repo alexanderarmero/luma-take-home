@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createTestDb, type TestDb } from "../db/testing.js";
 import { createApp } from "./app.js";
-import type { SlackClient } from "./client.js";
+import { createFakeSlack } from "./testing.js";
 import { VERIFY_ACTION_ID } from "./verify.js";
 
 const SECRET = "test-signing-secret";
@@ -10,8 +10,7 @@ const NOW = 1_700_000_000_000;
 
 let db: TestDb;
 let deferred: Array<() => Promise<void>>;
-let updates: Array<{ ts: string; text: string }>;
-let posts: string[];
+const slack = createFakeSlack();
 
 beforeAll(async () => {
   db = await createTestDb();
@@ -22,22 +21,8 @@ afterAll(async () => {
 
 beforeEach(() => {
   deferred = [];
-  updates = [];
-  posts = [];
+  slack.reset();
 });
-
-function fakeSlack(): SlackClient {
-  return {
-    postMessage: async ({ text }) => {
-      posts.push(text);
-      return { ts: "1700000000.000001" };
-    },
-    updateMessage: async ({ ts, text }) => {
-      updates.push({ ts, text });
-    },
-    uploadImage: async () => ({ fileId: "F1" }),
-  };
-}
 
 function app() {
   return createApp({
@@ -47,7 +32,7 @@ function app() {
       deferred.push(task);
     },
     db,
-    slack: fakeSlack(),
+    slack,
     reviewChannelId: "C_REVIEW",
     approverUserId: "U_ELLIE",
   });
@@ -108,7 +93,7 @@ describe("POST /slack/interactions", () => {
     // must not wait on a chat.update round trip.
     const res = await app().request(signedInteraction(blockAction(VERIFY_ACTION_ID)));
     expect(res.status).toBe(200);
-    expect(updates).toHaveLength(0);
+    expect(slack.updates).toHaveLength(0);
     expect(deferred).toHaveLength(1);
   });
 
@@ -116,17 +101,17 @@ describe("POST /slack/interactions", () => {
     await app().request(signedInteraction(blockAction(VERIFY_ACTION_ID)));
     await drain();
 
-    expect(updates).toHaveLength(1);
-    expect(updates[0]!.ts).toBe("1700000000.000100");
-    expect(updates[0]!.text).toContain("U_ELLIE");
-    expect(updates[0]!.text.toLowerCase()).toContain("works");
+    expect(slack.updates).toHaveLength(1);
+    expect(slack.updates[0]!.ts).toBe("1700000000.000100");
+    expect(slack.updates[0]!.text).toContain("U_ELLIE");
+    expect(slack.updates[0]!.text.toLowerCase()).toContain("works");
   });
 
   it("answers an unrecognised action without leaving Slack hanging", async () => {
     const res = await app().request(signedInteraction(blockAction("something_else")));
     expect(res.status).toBe(200);
     await drain();
-    expect(updates).toHaveLength(0);
+    expect(slack.updates).toHaveLength(0);
   });
 
   it("ignores a payload that is not a block action", async () => {
@@ -182,7 +167,7 @@ describe("/luma verify", () => {
     );
 
     expect(res.status).toBe(200);
-    expect(posts).toHaveLength(0);
+    expect(slack.posts).toHaveLength(0);
     expect(deferred).toHaveLength(1);
   });
 });
