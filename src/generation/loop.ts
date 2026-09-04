@@ -1,4 +1,8 @@
-import { batchCounts, findBatchesAwaitingAnnouncement, setBatchState } from "../db/repository.js";
+import {
+  batchOutcome,
+  findBatchesAwaitingAnnouncement,
+  setBatchState,
+} from "../db/repository.js";
 import { drain, type WorkerDeps } from "./worker.js";
 
 export interface LoopOptions {
@@ -22,15 +26,28 @@ export async function tick(deps: WorkerDeps, options: LoopOptions = {}): Promise
   });
 
   for (const batchId of await findBatchesAwaitingAnnouncement(deps.db)) {
-    const counts = await batchCounts(deps.db, batchId);
+    const outcome = await batchOutcome(deps.db, batchId);
     await setBatchState(deps.db, batchId, "ready_for_review");
-    await deps.slack.postMessage({
-      channel: deps.channel,
-      text:
-        `${options.approverUserId ? `<@${options.approverUserId}> ` : ""}` +
-        `Batch #${batchId} is ready for review. ${counts.total} images are above, ` +
-        `each needing an Approve or a Discard.`,
-    });
+
+    const lines = [
+      `${options.approverUserId ? `<@${options.approverUserId}> ` : ""}` +
+        `*Batch #${batchId} is ready for review.*`,
+      "",
+      `*${outcome.posted}* photos are above, each needing an Approve or a Discard.`,
+    ];
+
+    // Reported, not omitted. A photo that never arrives is otherwise
+    // indistinguishable from one still on its way, and the team would wait
+    // for something that is never coming.
+    if (outcome.failed > 0) {
+      lines.push(
+        "",
+        `*${outcome.failed}* couldn't be generated and aren't above. ` +
+          "Run `/luma status` to see which products came up short.",
+      );
+    }
+
+    await deps.slack.postMessage({ channel: deps.channel, text: lines.join("\n") });
   }
 
   return worked;

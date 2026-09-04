@@ -11,6 +11,7 @@ import {
 import type { SqlClient } from "../db/client.js";
 import { getImageByObjectKey, setBatchState } from "../db/repository.js";
 import type { ImageGenerator } from "../generation/generator.js";
+import { describeWait } from "../generation/estimate.js";
 import { startGeneration } from "../generation/start.js";
 import type { ImageModel } from "../pricing.js";
 import { buildStatusSummary } from "../status/status.js";
@@ -264,13 +265,24 @@ export function createApp(deps: AppDeps) {
       deps.defer(async () => {
         const counts = await startGeneration(deps.db, batchId);
         await setBatchState(deps.db, batchId, "generating");
+
+        const total = counts.styled + counts.passThrough;
         await slack.postMessage({
           channel,
-          text:
-            `Starting batch #${batchId}. Generating ${counts.styled} styled ` +
-            `photos and copying ${counts.passThrough} original photos across. ` +
-            `I'll post each one here as it's ready, then tell you when the ` +
-            `whole batch is done.`,
+          text: [
+            `*Batch #${batchId} has started.*`,
+            "",
+            `I'm generating *${counts.styled}* styled photos and copying ` +
+              `*${counts.passThrough}* original photos across.`,
+            "",
+            "*Nothing will appear straight away.* Photos are posted here once a " +
+              "product's whole set has finished, so you'll see them arrive " +
+              "product by product rather than one at a time.",
+            "",
+            `This usually takes ${describeWait(total)} for a batch this size. ` +
+              "You don't need to wait here — I'll mention you once the whole " +
+              "batch is ready to review.",
+          ].join("\n"),
         });
         void reviewChannelId;
       });

@@ -142,6 +142,25 @@ describe("tick", () => {
 
     await tick(deps(moderated), { approverUserId: "U_ELLIE" });
 
-    expect(slack.posts.filter((p) => p.text.includes("ready for review"))).toHaveLength(1);
+    const announcement = slack.posts.find((p) => p.text.includes("ready for review"));
+    expect(announcement).toBeDefined();
+    // Says how many never arrived. A missing photo is otherwise
+    // indistinguishable from one still on its way.
+    expect(announcement!.text).toContain("3");
+    expect(announcement!.text.toLowerCase()).toContain("couldn't be generated");
+  });
+
+  it("reports how many photos actually made it", async () => {
+    await seedBatch([{ sku: "HG-002", shotIdea: "kitchen" }]);
+    await tick(deps(), { approverUserId: "U_ELLIE" });
+    const announcement = slack.posts.find((p) => p.text.includes("ready for review"));
+    expect(announcement!.text).toContain("*3* photos are above");
+  });
+
+  it("does not mention failures when there were none", async () => {
+    await seedBatch([{ sku: "HG-002", shotIdea: "kitchen" }]);
+    await tick(deps(), { approverUserId: "U_ELLIE" });
+    const announcement = slack.posts.find((p) => p.text.includes("ready for review"));
+    expect(announcement!.text.toLowerCase()).not.toContain("couldn't be generated");
   });
 });

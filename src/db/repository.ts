@@ -377,6 +377,23 @@ export async function claimNextJob(
        join images i     on i.id = j.image_id
        join batch_rows r on r.batch_id = i.batch_id and r.sku = i.sku
       where j.state not in ('posted', 'failed')
+        -- A stored image waits for its siblings. Posting whichever candidate
+        -- finished first scatters a product's shots through the stream, and
+        -- adjacency is what makes a scrolled channel reviewable at all.
+        --
+        -- "Settled", not "succeeded": a sibling that failed is finished too,
+        -- so one moderated candidate cannot hold the other two hostage.
+        and (
+          j.state <> 'stored'
+          or not exists (
+            select 1
+              from image_jobs sj
+              join images si on si.id = sj.image_id
+             where sj.batch_id = j.batch_id
+               and si.sku = i.sku
+               and sj.state not in ('stored', 'posted', 'failed')
+          )
+        )
         ${batchId === undefined ? "" : `and j.batch_id = $${nextParam++}`}
         ${excludeImageIds.length === 0 ? "" : `and j.image_id <> all($${nextParam++}::uuid[])`}
       order by i.sku asc, i.slot asc
@@ -511,4 +528,22 @@ export async function findBatchesAwaitingAnnouncement(
         and exists (select 1 from image_jobs j where j.batch_id = b.id)`,
   );
   return rows.map((r) => Number(r.id));
+}
+
+/** How a finished batch actually turned out, failures included. */
+export async function batchOutcome(
+  db: SqlClient,
+  batchId: number,
+): Promise<{ posted: number; failed: number }> {
+  const { rows } = await db.query<{ posted: string; failed: string }>(
+    `select
+       count(*) filter (where state = 'posted') as posted,
+       count(*) filter (where state = 'failed') as failed
+     from image_jobs where batch_id = $1`,
+    [batchId],
+  );
+  return {
+    posted: Number(rows[0]?.posted ?? 0),
+    failed: Number(rows[0]?.failed ?? 0),
+  };
 }
