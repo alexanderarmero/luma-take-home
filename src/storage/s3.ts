@@ -5,8 +5,17 @@ import type { FetchedObject, ObjectStore, PutInput, StoredObject } from "./store
 export interface S3StoreOptions {
   bucket: string;
   region: string;
-  /** Set for Cloudflare R2 or any other S3-compatible host; omit for AWS. */
+  /** Set for Railway Buckets, Cloudflare R2, or any S3-compatible host. */
   endpoint?: string;
+  /**
+   * Path-style addressing (`endpoint/bucket/key`) instead of the standard
+   * virtual-hosted style (`bucket.endpoint/key`).
+   *
+   * Defaults to false, because virtual-hosted is what the S3 API and Railway
+   * Buckets both use. Only turn it on for a host that requires it — some
+   * older Railway buckets do, and their Credentials tab says so.
+   */
+  forcePathStyle?: boolean;
   accessKeyId: string;
   secretAccessKey: string;
   /** Injectable so the wiring is testable without a bucket. */
@@ -16,16 +25,18 @@ export interface S3StoreOptions {
 /**
  * S3-compatible object storage.
  *
- * Cloudflare R2 speaks the S3 API, so the only difference is an endpoint and
- * forced path-style addressing — which keeps the provider a provisioning
- * decision rather than a code one.
+ * Railway Buckets, Cloudflare R2 and AWS S3 all speak the same API, so the
+ * provider stays a provisioning decision rather than a code one. The only
+ * thing that genuinely varies is URL style, which is why it is a setting
+ * rather than an assumption.
  */
 export function createS3ObjectStore(options: S3StoreOptions): ObjectStore {
   const client =
     options.client ??
     new S3Client({
       region: options.region,
-      ...(options.endpoint ? { endpoint: options.endpoint, forcePathStyle: true } : {}),
+      ...(options.endpoint ? { endpoint: options.endpoint } : {}),
+      ...(options.forcePathStyle ? { forcePathStyle: true } : {}),
       credentials: {
         accessKeyId: options.accessKeyId,
         secretAccessKey: options.secretAccessKey,
