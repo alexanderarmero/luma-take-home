@@ -153,7 +153,7 @@ persisted by us and served from our own storage, or uploaded to Slack as files. 
 all-in-Slack design does not remove the storage requirement — it makes it more urgent,
 because the channel is now the permanent record and broken images are permanent damage.**
 
-**F4.5 — Channel posting restrictions and interactivity are separate mechanisms.** `[VERIFY]`
+**F4.5 — Channel posting restrictions and interactivity are separate mechanisms.** `[CONFIRMED — 2026-09-04, ticket 02 probe 1]`
 Restricting who can post to a channel governs *messages*. Clicking a Block Kit button is an
 *interaction*, not a message, so buttons are expected to remain functional in a
 posting-restricted channel. **This must be verified early — the entire read-only-channel
@@ -190,12 +190,15 @@ channel") are notified. In a batch-parent design the bot is the parent author, s
 120 images into a thread would notify essentially nobody — which is exactly why that design
 solves the flood.
 
-**F4.12 — Muting a channel suppresses its notifications and unread badge; direct
-@-mentions are believed to still produce a badge.** `[VERIFY — HIGH PRIORITY, DAY ONE]`
-Could not be confirmed from Slack's help pages during fact-finding. **This must be tested in
-a real workspace before the design is trusted**, because the entire "mute the channel"
-mitigation (T3.6) rests on it. If a mute suppresses @-mentions too, muting costs us push
-entirely and the flood has no safe escape valve.
+**F4.12 — Muting a channel suppresses its notifications and unread badge, but a direct
+@-mention still badges.** `[CONFIRMED — 2026-09-04, ticket 02 probe 2]`
+Verified in a real workspace: with the review channel muted, a message mentioning the
+approver still produced a badge.
+
+**This is the load-bearing one.** It means the flood mitigation works exactly as designed:
+the 120-message candidate stream posts quietly into a muted channel, and **one** summary
+message @-mentions Ellie. One ping per batch instead of 120, with push preserved.
+**T3.4 and T3.6 stand; the bot-DM fallback is not needed.**
 
 **F4.13 — Slack modals accept file uploads via the `file_input` block element.** `[CONFIRMED — docs.slack.dev/reference/block-kit/block-elements/file-input-element]`
 - Must sit inside an `input` block.
@@ -371,16 +374,16 @@ longer to become available.
 image message). Without it, a file share and an interactive message would be two separate
 posts and the one-message-per-image design would break.
 
-**⚠️ `[VERIFY — HIGH PRIORITY, DAY ONE]`** The docs say *"structured rich text blocks"*, which
-may or may not include an `actions` block containing buttons. **D3.2 depends on this.** Must
-be tested against a real workspace before committing to the upload path.
+**✅ `[CONFIRMED — 2026-09-04, ticket 02 probe 3]`** An `actions` block carrying buttons does
+render on a file-share message. Verified with a real catalog photo (~500 KB), the same path
+ticket 05 will use.
 
-**Fallback ladder if buttons are rejected on a file-share message:**
-1. Upload privately (no `channel_id`), obtain `permalink_public` via `files.sharedPublicURL`,
-   then `chat.postMessage` with an `image` block plus buttons — Slack-hosted bytes, full
-   Block Kit.
-2. Revert to `chat.postMessage` with an `image_url` pointing at our own storage (the original
-   option (a)) — one canonical object, channel coupled to our infrastructure.
+**D3.2 and D32 both stand.** Image bytes live in Slack, each image is one message carrying
+its own decision, and the channel does not depend on our storage staying alive.
+
+**The fallback ladder is not needed and is retained only for the record:** upload privately
+then post an `image` block against `permalink_public`; or revert to `image_url` pointing at
+our own storage.
 
 **F8.3 — `files.completeUploadExternal` is Tier 4 rate-limited: 100+ per minute.**
 More generous than `chat.postMessage` (~1/sec, F4.8). Posting throughput is bounded by
@@ -460,3 +463,27 @@ not the database, not the rate limits. Every architectural choice in this design
 scale; the single human in the approval path is not. The mitigations that matter at 10× are
 all attention-side — bulk actions, sampling-based approval, auto-approving high-confidence
 shots, or delegating rights (OQ-1) — and **none of them are in v1.**
+
+---
+
+## F10 — Ticket 02 outcome (2026-09-04)
+
+All three platform verifications **passed**. Run via `/luma verify` against the deployed
+service, in the real workspace, with the review channel configured as designed.
+
+| Fact | Question | Result | Decision affected |
+|---|---|---|---|
+| **F4.5** | Buttons in a posting-restricted channel? | ✅ works | **D2.1 stands** |
+| **F4.12** | Mention badges a muted channel? | ✅ badges | **T3.4 / T3.6 stand** |
+| **F8.2** | Blocks on a file-share message? | ✅ renders | **D3.2 + D32 stand** |
+
+**No decision was overturned.** Every fallback that had been specified against these
+failing — approval moving off the channel, a bot DM replacing channel mentions, image bytes
+reverting to storage references with two messages per image — is now unnecessary, and is kept
+only as a record of what would have happened.
+
+**Why this mattered more than three checkmarks suggests.** These were the three
+`[VERIFY]` items capable of invalidating the *posting layer* rather than a detail of it.
+Discovering any of them at ticket 07 would have meant rebuilding tickets 05, 07 and 08 on a
+different shape. The cost of finding out was one slash command; the cost of not finding out
+was most of the build.
