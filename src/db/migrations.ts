@@ -100,4 +100,27 @@ export const MIGRATIONS: ReadonlyArray<{ name: string; sql: string }> = [
       create index image_jobs_state_idx on image_jobs (state);
     `,
   },
+  {
+    name: "0002_batch_rows",
+    sql: `
+      -- The parsed catalog, stored at ingest so a batch is self-contained.
+      -- Re-reading the uploaded file at generation time would depend on Slack
+      -- still hosting it, and on it not having changed underneath us.
+      create table batch_rows (
+        id           bigserial   primary key,
+        batch_id     bigint      not null references batches(id),
+        row_index    int         not null,
+        sku          text        not null,
+        product_name text        not null,
+        category     text        not null,
+        colour       text        not null,
+        material     text        not null,
+        price        text        not null,
+        photo_url    text        not null,
+        shot_idea    text,
+        constraint batch_rows_sku_unique unique (batch_id, sku)
+      );
+      create index batch_rows_batch_idx on batch_rows (batch_id, row_index);
+    `,
+  },
 ];

@@ -11,12 +11,12 @@ at the end.
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done (2026-09-03)
 
-- [ ] A Slack workspace exists with a dedicated review channel, top-level posting restricted and thread replies open
-- [ ] A Slack app is installed with the scopes needed to post messages, upload files, and receive interactions
-- [ ] The service is deployed to a real host and reachable over HTTPS
-- [ ] Inbound Slack requests are verified for authenticity, and requests failing verification are rejected
-- [ ] Every inbound Slack request is acknowledged within Slack's three-second window, with any real work deferred
-- [ ] A ping slash command typed in the channel returns a reply from the deployed service
-- [ ] Secrets are supplied by environment and no credential is committed
+- [x] A Slack workspace exists with a dedicated review channel, top-level posting restricted and thread replies open
+- [x] A Slack app is installed with the scopes needed to post messages, upload files, and receive interactions
+- [x] The service is deployed to a real host and reachable over HTTPS
+- [x] Inbound Slack requests are verified for authenticity, and requests failing verification are rejected
+- [x] Every inbound Slack request is acknowledged within Slack's three-second window, with any real work deferred
+- [x] A ping slash command typed in the channel returns a reply from the deployed service
+- [x] Secrets are supplied by environment and no credential is committed

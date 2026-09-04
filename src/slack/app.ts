@@ -1,5 +1,13 @@
 import { Hono } from "hono";
 import type { DbStatus } from "../db/bootstrap.js";
+import {
+  buildUploadModal,
+  GENERATE_ACTION_ID,
+  ingestCatalog,
+  UPLOAD_ACTION_ID,
+  UPLOAD_BLOCK_ID,
+  UPLOAD_CALLBACK_ID,
+} from "../catalog/ingest.js";
 import type { SqlClient } from "../db/client.js";
 import { buildStatusSummary } from "../status/status.js";
 import type { SlackClient } from "./client.js";
@@ -30,6 +38,7 @@ export interface AppDeps {
 const USAGE = [
   "Commands I know:",
   "• `/luma ping` — check I'm awake",
+  "• `/luma upload` — drop in a catalog CSV",
   "• `/luma status` — where the latest batch stands",
   "• `/luma verify` — post the platform-verification probes",
 ].join("\n");
@@ -90,6 +99,23 @@ export function createApp(deps: AppDeps) {
           );
         }
 
+      case "upload": {
+        const { slack } = deps;
+        const triggerId = params.get("trigger_id");
+        if (!slack || !triggerId) {
+          return c.json(ephemeral("Slack posting isn't configured on this instance."));
+        }
+        try {
+          // Awaited, not deferred: `trigger_id` expires about three seconds
+          // after the command, so the modal cannot wait behind other work.
+          await slack.openView({ triggerId, view: buildUploadModal() });
+          return c.body(null, 200);
+        } catch (error) {
+          console.error("[/luma upload] could not open modal", error);
+          return c.json(ephemeral("I couldn't open the upload window — try again."));
+        }
+      }
+
       case "verify": {
         const { slack, reviewChannelId, approverUserId } = deps;
         if (!slack || !reviewChannelId || !approverUserId) {
@@ -143,12 +169,55 @@ export function createApp(deps: AppDeps) {
       return c.body(null, 200);
     }
 
+    if (payload.type === "view_submission") {
+      if (payload.view?.callback_id !== UPLOAD_CALLBACK_ID) return c.body(null, 200);
+
+      const file =
+        payload.view?.state?.values?.[UPLOAD_BLOCK_ID]?.[UPLOAD_ACTION_ID]
+          ?.files?.[0];
+      const { slack, reviewChannelId } = deps;
+
+      if (file?.url_private && slack && reviewChannelId) {
+        const channel = reviewChannelId;
+        const url = file.url_private;
+        const name = file.name ?? "catalog.csv";
+        // Downloading and parsing is far too slow for the acknowledgement
+        // window; an empty 200 closes the modal immediately.
+        deps.defer(async () => {
+          await ingestCatalog({
+            slack,
+            db: deps.db,
+            channel,
+            fileUrl: url,
+            filename: name,
+          });
+        });
+      }
+
+      return c.body(null, 200);
+    }
+
     if (payload.type !== "block_actions") return c.body(null, 200);
 
     const action = payload.actions?.[0];
     const channel = payload.channel?.id;
     const ts = payload.message?.ts;
     const userId = payload.user?.id;
+
+    if (action?.action_id === GENERATE_ACTION_ID && deps.slack && channel && ts) {
+      const slack = deps.slack;
+      const batchId = action.value;
+      deps.defer(async () => {
+        await slack.postMessage({
+          channel,
+          text:
+            `Batch #${batchId}: generation is the next piece of work — the ` +
+            `catalog is stored and ready for it.`,
+          threadTs: ts,
+        });
+      });
+      return c.body(null, 200);
+    }
 
     if (action?.action_id === VERIFY_ACTION_ID && deps.slack && channel && ts) {
       const slack = deps.slack;
@@ -169,10 +238,22 @@ export function createApp(deps: AppDeps) {
   return app;
 }
 
+interface SlackFile {
+  id?: string;
+  name?: string;
+  url_private?: string;
+}
+
 interface BlockActionsPayload {
   type?: string;
   user?: { id?: string };
   channel?: { id?: string };
   message?: { ts?: string };
   actions?: Array<{ action_id?: string; value?: string }>;
+  view?: {
+    callback_id?: string;
+    state?: {
+      values?: Record<string, Record<string, { files?: SlackFile[] }>>;
+    };
+  };
 }

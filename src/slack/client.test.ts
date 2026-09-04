@@ -186,3 +186,80 @@ describe("uploadImage", () => {
     ).rejects.toThrow(/500/);
   });
 });
+
+describe("openView", () => {
+  it("opens a modal against the trigger id", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ ok: true, view: { id: "V1" } }),
+    ) as unknown as typeof fetch;
+
+    await clientWith(fetchImpl).openView({
+      triggerId: "trigger-123",
+      view: { type: "modal", callback_id: "catalog_upload" },
+    });
+
+    const [url, init] = (fetchImpl as unknown as { mock: { calls: FetchArgs[] } })
+      .mock.calls[0]!;
+    expect(url).toBe("https://slack.com/api/views.open");
+    expect(JSON.parse(init.body as string)).toMatchObject({
+      trigger_id: "trigger-123",
+      view: { callback_id: "catalog_upload" },
+    });
+  });
+
+  it("reports an expired trigger clearly", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ ok: false, error: "expired_trigger_id" }),
+    ) as unknown as typeof fetch;
+
+    await expect(
+      clientWith(fetchImpl).openView({ triggerId: "old", view: {} }),
+    ).rejects.toThrow(/expired_trigger_id/);
+  });
+});
+
+describe("downloadFile", () => {
+  it("sends the bot token, because private files are not public", async () => {
+    let sentAuth: string | undefined;
+    const fetchImpl = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      sentAuth = (init?.headers as Record<string, string>)?.Authorization;
+      return new Response("SKU,Product Name\nHG-001,Vase", {
+        status: 200,
+        headers: { "content-type": "text/csv" },
+      });
+    }) as unknown as typeof fetch;
+
+    const text = await clientWith(fetchImpl).downloadFile(
+      "https://files.slack.com/files-pri/T1-F1/catalog.csv",
+    );
+
+    expect(sentAuth).toBe("Bearer xoxb-test");
+    expect(text).toContain("HG-001");
+  });
+
+  it("refuses an HTML sign-in page instead of parsing it as a catalog", async () => {
+    // Slack answers an unauthenticated request for a private file with a 200
+    // and a sign-in page. Without this check the failure surfaces much later
+    // as a baffling "missing required columns" error naming HTML as the header.
+    const fetchImpl = vi.fn(async () =>
+      new Response("<!DOCTYPE html><html><body>Sign in to Slack</body></html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      }),
+    ) as unknown as typeof fetch;
+
+    await expect(
+      clientWith(fetchImpl).downloadFile("https://files.slack.com/files-pri/x"),
+    ).rejects.toThrow(/could not be downloaded/i);
+  });
+
+  it("surfaces a non-200 download", async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response("nope", { status: 404 }),
+    ) as unknown as typeof fetch;
+
+    await expect(
+      clientWith(fetchImpl).downloadFile("https://files.slack.com/files-pri/x"),
+    ).rejects.toThrow(/404/);
+  });
+});

@@ -236,3 +236,74 @@ export async function getLatestBatch(db: SqlClient): Promise<Batch | null> {
     state: row.state,
   };
 }
+
+export interface BatchRow {
+  sku: string;
+  productName: string;
+  category: string;
+  colour: string;
+  material: string;
+  price: string;
+  photoUrl: string;
+  shotIdea: string | null;
+}
+
+/** Stores the parsed catalog so the batch no longer depends on the upload. */
+export async function addBatchRows(
+  db: SqlClient,
+  batchId: number,
+  rows: BatchRow[],
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    for (const [index, row] of rows.entries()) {
+      await tx.query(
+        `insert into batch_rows
+           (batch_id, row_index, sku, product_name, category, colour, material, price, photo_url, shot_idea)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        [
+          batchId,
+          index,
+          row.sku,
+          row.productName,
+          row.category,
+          row.colour,
+          row.material,
+          row.price,
+          row.photoUrl,
+          row.shotIdea,
+        ],
+      );
+    }
+  });
+}
+
+export async function getBatchRows(
+  db: SqlClient,
+  batchId: number,
+): Promise<BatchRow[]> {
+  const { rows } = await db.query<{
+    sku: string;
+    product_name: string;
+    category: string;
+    colour: string;
+    material: string;
+    price: string;
+    photo_url: string;
+    shot_idea: string | null;
+  }>(
+    `select sku, product_name, category, colour, material, price, photo_url, shot_idea
+     from batch_rows where batch_id = $1 order by row_index asc`,
+    [batchId],
+  );
+
+  return rows.map((r) => ({
+    sku: r.sku,
+    productName: r.product_name,
+    category: r.category,
+    colour: r.colour,
+    material: r.material,
+    price: r.price,
+    photoUrl: r.photo_url,
+    shotIdea: r.shot_idea,
+  }));
+}
