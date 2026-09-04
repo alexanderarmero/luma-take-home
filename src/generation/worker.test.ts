@@ -215,13 +215,23 @@ describe("failures", () => {
     expect(slack.uploads).toHaveLength(0);
   });
 
-  it("leaves a still-running generation alone rather than spinning", async () => {
+  it("submits everything it can, then waits rather than declaring the batch done", async () => {
     const poll = async () => ({ state: "pending" }) as const;
     const batch = await seed([{ sku: "HG-002", shotIdea: "kitchen" }]);
     await startGeneration(db, batch.id);
 
-    const worked = await drain(deps(generator({ poll })), { batchId: batch.id });
-    expect(worked).toBe(1); // the submit, then it waits
+    const worked = await drain(
+      { ...deps(generator({ poll })), sleep: async () => {} },
+      { batchId: batch.id, maxSteps: 20 },
+    );
+
+    // All three candidates get submitted; none can be posted while their
+    // generations are still running.
+    expect(worked).toBe(3);
+    expect(slack.uploads).toHaveLength(0);
+
+    const { rows } = await db.query<{ state: string }>(`select state from image_jobs`);
+    expect(rows.every((r) => r.state === "submitted")).toBe(true);
   });
 
   it("gives up after repeated failures rather than retrying forever", async () => {
@@ -275,5 +285,79 @@ describe("resuming after a crash", () => {
 
     expect(after?.imageId).toBe(before?.imageId);
     expect(after?.generationId).toBe(before?.generationId);
+  });
+});
+
+describe("polling a generation that is not instant", () => {
+  /** Completed only after `pendingPolls` polls, like a real generation. */
+  function slowGenerator(pendingPolls: number): ImageGenerator {
+    const seen = new Map<string, number>();
+    return {
+      submit: async (input) => ({
+        generationId: `gen-${input.userId}`,
+        rateLimit: {},
+      }),
+      poll: async (id) => {
+        const n = (seen.get(id) ?? 0) + 1;
+        seen.set(id, n);
+        return n <= pendingPolls
+          ? ({ state: "pending" } as const)
+          : ({ state: "completed", outputUrl: OUTPUT } as const);
+      },
+    };
+  }
+
+  it("finishes every image even though none completes on the first poll", async () => {
+    // The real API queues work. A fake that returns `completed` immediately
+    // hides whether the loop can wait at all.
+    const batch = await seed([
+      { sku: "HG-001", shotIdea: null },
+      { sku: "HG-002", shotIdea: "morning kitchen" },
+      { sku: "HG-005", shotIdea: "dinner table" },
+    ]);
+    await startGeneration(db, batch.id);
+
+    await drain(
+      { ...deps(slowGenerator(2)), sleep: async () => {} },
+      { batchId: batch.id },
+    );
+
+    // 1 pass-through + two products at 3 candidates each.
+    expect(slack.uploads).toHaveLength(7);
+    expect(store.objects.size).toBe(7);
+  });
+
+  it("moves on to other work rather than blocking on one slow generation", async () => {
+    const batch = await seed([
+      { sku: "HG-002", shotIdea: "morning kitchen" },
+      { sku: "HG-009", shotIdea: null },
+    ]);
+    await startGeneration(db, batch.id);
+
+    await drain(
+      { ...deps(slowGenerator(3)), sleep: async () => {} },
+      { batchId: batch.id },
+    );
+
+    expect(slack.uploads).toHaveLength(4);
+  });
+
+  it("waits between polls instead of spinning", async () => {
+    const sleeps: number[] = [];
+    const batch = await seed([{ sku: "HG-002", shotIdea: "kitchen" }]);
+    await startGeneration(db, batch.id);
+
+    await drain(
+      {
+        ...deps(slowGenerator(2)),
+        sleep: async (ms: number) => {
+          sleeps.push(ms);
+        },
+      },
+      { batchId: batch.id },
+    );
+
+    expect(sleeps.length).toBeGreaterThan(0);
+    expect(sleeps.every((ms) => ms >= 1000)).toBe(true);
   });
 });

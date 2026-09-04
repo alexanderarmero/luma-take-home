@@ -344,7 +344,18 @@ export interface PipelineJob {
 export async function claimNextJob(
   db: SqlClient,
   batchId?: number,
+  /**
+   * Images to skip this pass — typically ones whose generation is still
+   * running. Without this the loop re-polls the same job forever and never
+   * reaches the work behind it.
+   */
+  excludeImageIds: string[] = [],
 ): Promise<PipelineJob | null> {
+  const params: unknown[] = [];
+  let nextParam = 1;
+  if (batchId !== undefined) params.push(batchId);
+  if (excludeImageIds.length > 0) params.push(excludeImageIds);
+
   const { rows } = await db.query<{
     image_id: string;
     batch_id: string;
@@ -366,10 +377,11 @@ export async function claimNextJob(
        join images i     on i.id = j.image_id
        join batch_rows r on r.batch_id = i.batch_id and r.sku = i.sku
       where j.state not in ('posted', 'failed')
-        ${batchId === undefined ? "" : "and j.batch_id = $1"}
+        ${batchId === undefined ? "" : `and j.batch_id = $${nextParam++}`}
+        ${excludeImageIds.length === 0 ? "" : `and j.image_id <> all($${nextParam++}::uuid[])`}
       order by i.sku asc, i.slot asc
       limit 1`,
-    batchId === undefined ? [] : [batchId],
+    params,
   );
 
   const row = rows[0];
@@ -466,4 +478,37 @@ export async function getImageByObjectKey(
     [objectKey],
   );
   return rows[0] ?? null;
+}
+
+export async function setBatchState(
+  db: SqlClient,
+  batchId: number,
+  state: string,
+): Promise<void> {
+  await db.query(`update batches set state = $2 where id = $1`, [batchId, state]);
+}
+
+/**
+ * Batches whose every job has reached a terminal stage but which have not been
+ * announced yet.
+ *
+ * Used to post the single "ready for review" mention exactly once, from the
+ * worker rather than from the request that started the batch — a request does
+ * not outlive a restart, and the batch has to be announced either way.
+ */
+export async function findBatchesAwaitingAnnouncement(
+  db: SqlClient,
+): Promise<number[]> {
+  const { rows } = await db.query<{ id: string }>(
+    `select b.id
+       from batches b
+      where b.state = 'generating'
+        and not exists (
+          select 1 from image_jobs j
+           where j.batch_id = b.id
+             and j.state not in ('posted', 'failed')
+        )
+        and exists (select 1 from image_jobs j where j.batch_id = b.id)`,
+  );
+  return rows.map((r) => Number(r.id));
 }

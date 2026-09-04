@@ -27,9 +27,17 @@ export interface WorkerDeps {
   aspectRatio: string;
   fetch?: typeof fetch;
   log?: (message: string) => void;
+  /** Injected so the poll loop can be driven without real time in tests. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
-export type StepResult = "worked" | "waiting" | "idle";
+export type StepResult =
+  /** A stage was completed and committed. */
+  | { kind: "worked" }
+  /** Nothing to do for this image yet — its generation is still running. */
+  | { kind: "waiting"; imageId: string }
+  /** No job is available at all. */
+  | { kind: "idle" };
 
 function decisionBlocks(job: PipelineJob): Block[] {
   const caption =
@@ -92,11 +100,15 @@ async function download(
  * committed stays committed, and the next boot picks the job up from there
  * rather than restarting it.
  */
-export async function runOnce(deps: WorkerDeps, batchId?: number): Promise<StepResult> {
+export async function runOnce(
+  deps: WorkerDeps,
+  batchId?: number,
+  excludeImageIds: string[] = [],
+): Promise<StepResult> {
   const doFetch = deps.fetch ?? fetch;
   const log = deps.log ?? (() => {});
-  const job = await claimNextJob(deps.db, batchId);
-  if (!job) return "idle";
+  const job = await claimNextJob(deps.db, batchId, excludeImageIds);
+  if (!job) return { kind: "idle" };
 
   try {
     switch (job.state) {
@@ -112,7 +124,7 @@ export async function runOnce(deps: WorkerDeps, batchId?: number): Promise<StepR
         if (rateLimit.remaining !== undefined) {
           log(`[worker] rate limit remaining ${rateLimit.remaining}/${rateLimit.limit}`);
         }
-        return "worked";
+        return { kind: "worked" };
       }
 
       case "pending_fetch": {
@@ -129,13 +141,13 @@ export async function runOnce(deps: WorkerDeps, batchId?: number): Promise<StepR
           objectKey: stored.key,
           checksum: stored.checksum,
         });
-        return "worked";
+        return { kind: "worked" };
       }
 
       case "submitted": {
         const result = await deps.generator.poll(job.generationId!);
 
-        if (result.state === "pending") return "waiting";
+        if (result.state === "pending") return { kind: "waiting", imageId: job.imageId };
 
         if (result.state === "failed") {
           if (result.retryable && job.attempts + 1 < MAX_ATTEMPTS) {
@@ -144,14 +156,14 @@ export async function runOnce(deps: WorkerDeps, batchId?: number): Promise<StepR
               failureCode: result.failureCode,
               lastError: result.failureReason,
             });
-            return "worked";
+            return { kind: "worked" };
           }
           await setJobState(deps.db, job.imageId, "failed", {
             failureCode: result.failureCode,
             lastError: result.failureReason,
           });
           log(`[worker] ${job.filename} failed: ${result.failureCode}`);
-          return "worked";
+          return { kind: "worked" };
         }
 
         // Downloaded immediately. The output link expires in an hour, and
@@ -167,7 +179,7 @@ export async function runOnce(deps: WorkerDeps, batchId?: number): Promise<StepR
           objectKey: stored.key,
           checksum: stored.checksum,
         });
-        return "worked";
+        return { kind: "worked" };
       }
 
       case "stored": {
@@ -186,11 +198,11 @@ export async function runOnce(deps: WorkerDeps, batchId?: number): Promise<StepR
         });
 
         await markImagePosted(deps.db, job.imageId, ts ?? "");
-        return "worked";
+        return { kind: "worked" };
       }
 
       default:
-        return "idle";
+        return { kind: "idle" };
     }
   } catch (error) {
     const retryable = error instanceof GenerationError ? error.retryable : true;
@@ -202,7 +214,7 @@ export async function runOnce(deps: WorkerDeps, batchId?: number): Promise<StepR
         lastError: (error as Error).message,
       });
       log(`[worker] ${job.filename} attempt ${attempts} failed, will retry`);
-      return "waiting";
+      return { kind: "waiting", imageId: job.imageId };
     }
 
     await setJobState(deps.db, job.imageId, "failed", {
@@ -210,28 +222,58 @@ export async function runOnce(deps: WorkerDeps, batchId?: number): Promise<StepR
       incrementAttempts: true,
     });
     log(`[worker] ${job.filename} gave up: ${(error as Error).message}`);
-    return "worked";
+    return { kind: "worked" };
   }
 }
 
 /**
- * Runs jobs until nothing is left to do.
+ * Runs a batch to completion.
  *
- * `maxSteps` is a runaway guard, not a budget: a bug that never advances a job
- * would otherwise spin forever.
+ * The subtlety is that a job can be *waiting* rather than finished: a real
+ * generation takes a while, and polling it returns "still running". An earlier
+ * version treated that as "nothing more to do" and returned — which, against
+ * the real API, submitted the first image and stopped. Every fake in the tests
+ * completed instantly, so nothing caught it.
+ *
+ * So waiting images are set aside, the rest of the batch carries on, and once
+ * only waiting images remain the loop sleeps and re-polls them. Luma documents
+ * 2–5 seconds as a safe cadence.
  */
 export async function drain(
   deps: WorkerDeps,
-  options: { maxSteps?: number; batchId?: number } = {},
+  options: {
+    maxSteps?: number;
+    batchId?: number;
+    pollIntervalMs?: number;
+  } = {},
 ): Promise<number> {
-  const maxSteps = options.maxSteps ?? 5000;
+  const maxSteps = options.maxSteps ?? 100_000;
+  const pollIntervalMs = options.pollIntervalMs ?? 3_000;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+
+  const waiting = new Set<string>();
   let worked = 0;
 
   for (let step = 0; step < maxSteps; step++) {
-    const result = await runOnce(deps, options.batchId);
-    if (result === "idle" || result === "waiting") return worked;
-    worked += 1;
+    const result = await runOnce(deps, options.batchId, [...waiting]);
+
+    if (result.kind === "worked") {
+      worked += 1;
+      continue;
+    }
+
+    if (result.kind === "waiting") {
+      waiting.add(result.imageId);
+      continue;
+    }
+
+    // Nothing actionable left. If anything is merely waiting, give it time and
+    // look again; otherwise the batch is genuinely done.
+    if (waiting.size === 0) return worked;
+    await sleep(pollIntervalMs);
+    waiting.clear();
   }
 
+  deps.log?.(`[worker] stopped after ${maxSteps} steps — this should not happen`);
   return worked;
 }

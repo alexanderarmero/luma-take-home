@@ -9,10 +9,9 @@ import {
   UPLOAD_CALLBACK_ID,
 } from "../catalog/ingest.js";
 import type { SqlClient } from "../db/client.js";
-import { getImageByObjectKey } from "../db/repository.js";
+import { getImageByObjectKey, setBatchState } from "../db/repository.js";
 import type { ImageGenerator } from "../generation/generator.js";
 import { startGeneration } from "../generation/start.js";
-import { drain } from "../generation/worker.js";
 import type { ImageModel } from "../pricing.js";
 import { buildStatusSummary } from "../status/status.js";
 import type { ObjectStore } from "../storage/store.js";
@@ -259,37 +258,21 @@ export function createApp(deps: AppDeps) {
         return c.body(null, 200);
       }
 
+      // Seeds the work and announces it, then hands off. The running is done
+      // by the background worker rather than here: a deferred task dies with
+      // its process, and a batch has to survive a restart.
       deps.defer(async () => {
         const counts = await startGeneration(deps.db, batchId);
+        await setBatchState(deps.db, batchId, "generating");
         await slack.postMessage({
           channel,
           text:
             `Starting batch #${batchId}. Generating ${counts.styled} styled ` +
             `photos and copying ${counts.passThrough} original photos across. ` +
-            `I'll post each one here as it's ready.`,
+            `I'll post each one here as it's ready, then tell you when the ` +
+            `whole batch is done.`,
         });
-
-        await drain(
-          {
-            db: deps.db,
-            generator,
-            store,
-            slack,
-            channel: reviewChannelId,
-            model: deps.model ?? "uni-1-max",
-            aspectRatio: deps.aspectRatio ?? "1:1",
-            ...(deps.fetch ? { fetch: deps.fetch } : {}),
-            log: (message) => console.log(message),
-          },
-          { batchId },
-        );
-
-        await slack.postMessage({
-          channel,
-          text:
-            `<@${deps.approverUserId}> batch #${batchId} is ready for review — ` +
-            `everything above needs an Approve or a Discard.`,
-        });
+        void reviewChannelId;
       });
 
       return c.body(null, 200);

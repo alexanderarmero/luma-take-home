@@ -5,12 +5,17 @@ import { createPostgresClient } from "./db/postgres.js";
 import { describeDatabaseUrl } from "./db/redact.js";
 import { createApp } from "./slack/app.js";
 import { createLumaGenerator } from "./generation/generator.js";
+import { startWorkerLoop } from "./generation/loop.js";
 import { createSlackClient } from "./slack/client.js";
 import { createS3ObjectStore } from "./storage/s3.js";
 
 const config = loadConfig(process.env);
 const db = createPostgresClient(config.databaseUrl);
 const dbBootstrap = createDbBootstrap(db);
+
+const slack = createSlackClient({ botToken: config.slack.botToken });
+const generator = createLumaGenerator({ authToken: config.lumaApiKey });
+const store = createS3ObjectStore(config.storage);
 
 const app = createApp({
   signingSecret: config.slack.signingSecret,
@@ -24,11 +29,11 @@ const app = createApp({
   },
   db,
   dbStatus: dbBootstrap.status,
-  slack: createSlackClient({ botToken: config.slack.botToken }),
+  slack,
   reviewChannelId: config.slack.reviewChannelId,
   approverUserId: config.slack.approverUserId,
-  generator: createLumaGenerator({ authToken: config.lumaApiKey }),
-  store: createS3ObjectStore(config.storage),
+  generator,
+  store,
 });
 
 // The HTTP server comes up first, deliberately.
@@ -48,7 +53,25 @@ const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
     `[server] listening on ${info.address}:${info.port} (${info.family})`,
   );
   console.log(`[db] target ${describeDatabaseUrl(config.databaseUrl)}`);
-  void dbBootstrap.start();
+  void dbBootstrap.start().then(() => {
+    // The pipeline runs here, not inside the request that started it. Work
+    // lives in the job table, so a restart loses time and nothing else — the
+    // next tick picks up generations submitted by a process that is gone.
+    startWorkerLoop(
+      {
+        db,
+        generator,
+        store,
+        slack,
+        channel: config.slack.reviewChannelId,
+        model: "uni-1-max",
+        aspectRatio: "1:1",
+        log: (message) => console.log(message),
+      },
+      { approverUserId: config.slack.approverUserId },
+    );
+    console.log("[worker] loop started");
+  });
 });
 
 // On a rolling deploy the platform sends SIGTERM while requests are still in
