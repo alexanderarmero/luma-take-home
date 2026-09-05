@@ -97,9 +97,10 @@ export function buildRecap(
   lines.push(
     "",
     "*What you would review*",
-    `${count(plan.totalImagesToReview, "image")} would be posted to this ` +
-      `channel, one message each, every one with an Approve button and a ` +
-      `Discard button.`,
+    `${count(plan.totalImagesToReview, "image")}, on one overview page — ` +
+      `each product's shots side by side, so choosing between them is a ` +
+      `comparison rather than a scroll. Every set is also posted to the ` +
+      `channel with its own thread, for talking about it.`,
     "",
     "*What it would cost*",
     plan.estimatedCostUsd > 0

@@ -94,6 +94,19 @@ describe("with nothing to report", () => {
   });
 });
 
+describe("a batch that was uploaded but never started", () => {
+  it("says so, rather than looking like one mid-generation", async () => {
+    // Reachable since the recap became a modal: closing it leaves the rows
+    // behind with nothing ever generated.
+    await createBatch(db, { sourceFilename: "catalog.csv" });
+
+    const text = await status();
+    expect(text).toContain("never started");
+    expect(text).toContain("nothing has been generated");
+    expect(text).toContain("/luma upload");
+  });
+});
+
 describe("the summary", () => {
   it("counts approved, discarded and outstanding", async () => {
     const { images } = await batchWith([{ sku: "HG-002", slots: 3 }]);

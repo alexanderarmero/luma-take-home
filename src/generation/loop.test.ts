@@ -154,6 +154,18 @@ describe("tick", () => {
     expect(announcement!.text.toLowerCase()).toContain("couldn't be generated");
   });
 
+  it("points the summons at the page where deciding happens", async () => {
+    // The one ping per batch has to carry the thing it is summoning you to.
+    await seedBatch([{ sku: "HG-002", shotIdea: "kitchen" }]);
+    await tick(deps(), {
+      approverUserId: "U_ELLIE",
+      publicBaseUrl: "https://shots.test",
+    });
+
+    const announcement = slack.posts.find((p) => p.text.includes("ready for review"));
+    expect(announcement!.text).toMatch(/https:\/\/shots\.test\/review\/\w+/);
+  });
+
   it("reports how many photos actually made it", async () => {
     await seedBatch([{ sku: "HG-002", shotIdea: "kitchen" }]);
     await tick(deps(), { approverUserId: "U_ELLIE" });

@@ -93,10 +93,10 @@ describe("buildRecap", () => {
     );
   });
 
-  it("names what the reviewer will actually be doing", () => {
+  it("names what the reviewer will actually be doing, and where", () => {
     const text = recapForRealCatalog();
-    expect(text).toContain("Approve button");
-    expect(text).toContain("Discard button");
+    expect(text).toContain("overview page");
+    expect(text).toContain("side by side");
   });
 
   it("surfaces skipped rows under a heading that says what happened to them", () => {

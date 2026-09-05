@@ -1,5 +1,6 @@
 import {
   batchOutcome,
+  ensureReviewToken,
   findBatchesAwaitingAnnouncement,
   setBatchState,
 } from "../db/repository.js";
@@ -31,12 +32,18 @@ export async function tick(deps: WorkerDeps, options: LoopOptions = {}): Promise
   for (const batchId of await findBatchesAwaitingAnnouncement(deps.db)) {
     const outcome = await batchOutcome(deps.db, batchId);
     await setBatchState(deps.db, batchId, "ready_for_review");
+    // The decision surface is the page now, so the summons has to carry it.
+    const reviewToken = await ensureReviewToken(deps.db, batchId);
 
     const lines = [
       `${options.approverUserId ? `<@${options.approverUserId}> ` : ""}` +
         `*Batch #${batchId} is ready for review.*`,
       "",
-      `*${outcome.posted}* photos are above, each needing an Approve or a Discard.`,
+      `*${outcome.posted}* photos are above, each waiting on an approve or a ` +
+        "discard.",
+      ...(options.publicBaseUrl && reviewToken
+        ? ["", `Decide on them here: ${options.publicBaseUrl}/review/${reviewToken}`]
+        : []),
     ];
 
     // Reported, not omitted. A photo that never arrives is otherwise

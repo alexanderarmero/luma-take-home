@@ -1349,3 +1349,26 @@ noted as the obvious thing to wire to Slack's user directory later.
 this is nothing; it is not a design that survives a hundred readers. The
 revision check means a poll that finds nothing changed costs one query and no
 render, which is what makes the always-on poll affordable at all.
+
+---
+
+## T15 — Cost of D44–D46 (the ingest flow)
+
+**T15.1 — The recap is no longer scrollback.** It used to sit in the channel
+where anyone could re-read what a batch was going to cost before it ran. Now it
+lives in a modal that closes. Partly mitigated by D45 putting the figure in the
+channel at start, but the detailed breakdown — which rows were skipped and why
+— is seen once, by one person. If that turns out to matter, the fix is to post
+the skipped-rows list rather than to move the whole recap back.
+
+**T15.2 — `external_id` is workspace-global state we now depend on.** Two
+uploads in flight at the same time must not collide, hence a UUID. It is a
+small piece of coordination that did not exist when the recap was a message.
+
+**T15.3 — A dropped modal loses the batch's starting point.** If the uploader
+closes the modal while the file is being read, the batch row exists but nobody
+ever sees the recap or presses Generate. The old flow left a message anyone
+could come back to. Nothing is spent, but the batch would otherwise sit there
+looking identical to one mid-generation, so `/luma status` now names the state
+explicitly and says to upload again. Re-uploading, rather than resuming, is the
+deliberate choice: the file is the source of truth and it is one drag away.

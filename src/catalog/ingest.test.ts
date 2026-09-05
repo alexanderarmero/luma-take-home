@@ -12,12 +12,13 @@ import {
   createFakeSlack,
   type FakeSlack,
 } from "../slack/testing.js";
-import { GENERATE_ACTION_ID, UPLOAD_CALLBACK_ID } from "./ingest.js";
+import { RECAP_CALLBACK_ID, UPLOAD_CALLBACK_ID } from "./ingest.js";
 
 const SECRET = "test-signing-secret";
 const NOW = 1_700_000_000_000;
 const FILE_URL = "https://files.slack.com/files-pri/T1-F1/catalog.csv";
 const REAL_CATALOG = readFileSync("data/catalog.csv", "utf8");
+const EXTERNAL_ID = "ext-test-1";
 
 let db: TestDb;
 let slack: FakeSlack;
@@ -61,7 +62,20 @@ function app() {
     model: "uni-1-max",
     aspectRatio: "1:1",
     fetch: fetchImage,
+    newExternalId: () => EXTERNAL_ID,
   });
+}
+
+/** The last view drawn into the open modal. */
+function currentView() {
+  return slack.viewUpdates.at(-1)?.view as
+    | { callback_id?: string; private_metadata?: string; blocks: unknown[] }
+    | undefined;
+}
+
+/** The text of that view, which is where the recap now lives. */
+function currentViewText() {
+  return JSON.stringify(currentView()?.blocks ?? []);
 }
 
 async function drain() {
@@ -148,9 +162,20 @@ describe("submitting the catalog", () => {
     slack.files.set(FILE_URL, REAL_CATALOG);
   });
 
-  it("closes the modal immediately and works afterwards", async () => {
+  it("shows a reading step immediately and works afterwards", async () => {
+    // Reading and parsing outlasts Slack's three-second submission window,
+    // so the response is a pushed view rather than a finished answer.
     const res = await app().request(viewSubmission());
     expect(res.status).toBe(200);
+
+    const body = (await res.json()) as {
+      response_action: string;
+      view: { external_id: string; blocks: unknown[] };
+    };
+    expect(body.response_action).toBe("push");
+    expect(body.view.external_id).toBe(EXTERNAL_ID);
+    expect(JSON.stringify(body.view.blocks)).toContain("Reading your catalog");
+
     expect(slack.posts).toHaveLength(0);
     expect(deferred).toHaveLength(1);
   });
@@ -167,21 +192,32 @@ describe("submitting the catalog", () => {
     expect(rows.filter((r) => r.shotIdea !== null)).toHaveLength(16);
   });
 
-  it("posts a recap carrying the counts and the bill", async () => {
+  it("draws the recap into the modal, not the channel", async () => {
+    // A file someone is still deciding about is not the channel's business.
     await app().request(viewSubmission());
     await drain();
 
-    const [recap] = slack.posts;
-    expect(recap!.channel).toBe("C_REVIEW");
-    expect(recap!.text).toContain("40");
-    expect(recap!.text).toContain("16");
-    expect(recap!.text).toMatch(/\$5\.\d\d/);
+    expect(slack.posts).toHaveLength(0);
+    expect(slack.viewUpdates.at(-1)!.externalId).toBe(EXTERNAL_ID);
+
+    const text = currentViewText();
+    expect(text).toContain("40");
+    expect(text).toContain("16");
+    expect(text).toMatch(/\$5\.\d\d/);
   });
 
-  it("puts a Generate button on the recap", async () => {
+  it("makes Generate the modal's own submit button", async () => {
+    // The estimate and the decision are the same view, so nobody can press
+    // Generate without the bill in front of them.
     await app().request(viewSubmission());
     await drain();
-    expect(JSON.stringify(slack.posts[0]!.blocks)).toContain(GENERATE_ACTION_ID);
+
+    const view = currentView()!;
+    expect(view.callback_id).toBe(RECAP_CALLBACK_ID);
+    expect(JSON.stringify(view)).toContain('"text":"Generate"');
+
+    const batch = await getLatestBatch(db);
+    expect(view.private_metadata).toBe(String(batch!.id));
   });
 
   it("spends nothing", async () => {
@@ -205,15 +241,23 @@ describe("submitting something unusable", () => {
     await app().request(viewSubmission());
     await drain();
 
-    expect(slack.posts[0]!.text).toContain("Photo");
+    expect(currentViewText()).toContain("Photo");
+    expect(slack.posts).toHaveLength(0);
     expect(await getLatestBatch(db)).toBeNull();
+  });
+
+  it("offers nothing to submit when the file is unusable", async () => {
+    slack.files.set(FILE_URL, "SKU,Product Name,Price\nHG-001,Vase,$48");
+    await app().request(viewSubmission());
+    await drain();
+    expect(currentView()).not.toHaveProperty("submit");
   });
 
   it("says so when the file cannot be downloaded at all", async () => {
     // No fake file registered — stands in for a revoked token or lost scope.
     await app().request(viewSubmission("https://files.slack.com/missing"));
     await drain();
-    expect(slack.posts[0]!.text).toContain("couldn't read");
+    expect(currentViewText()).toContain("couldn't read");
     expect(await getLatestBatch(db)).toBeNull();
   });
 
@@ -226,10 +270,29 @@ describe("submitting something unusable", () => {
     );
     await app().request(viewSubmission());
     await drain();
-    expect(slack.posts[0]!.text).toContain("Photo");
-    expect(slack.posts[0]!.text).toContain("HG-001");
+    expect(currentViewText()).toContain("Photo");
+    expect(currentViewText()).toContain("HG-001");
   });
 });
+
+/** Pressing Generate is submitting the recap view. */
+function generateSubmission(batchId: number) {
+  const payload = {
+    type: "view_submission",
+    user: { id: "U_ELLIE" },
+    view: {
+      callback_id: RECAP_CALLBACK_ID,
+      private_metadata: String(batchId),
+      state: { values: {} },
+    },
+  };
+  const body = `payload=${encodeURIComponent(JSON.stringify(payload))}`;
+  return new Request("http://localhost/slack/interactions", {
+    method: "POST",
+    headers: sign(body),
+    body,
+  });
+}
 
 describe("the Generate button", () => {
   async function uploadThenPressGenerate() {
@@ -240,21 +303,7 @@ describe("the Generate button", () => {
     const batch = await getLatestBatch(db);
     slack.posts.length = 0;
 
-    const payload = {
-      type: "block_actions",
-      user: { id: "U_ELLIE" },
-      channel: { id: "C_REVIEW" },
-      message: { ts: "1700000000.000100" },
-      actions: [{ action_id: GENERATE_ACTION_ID, value: String(batch!.id) }],
-    };
-    const body = `payload=${encodeURIComponent(JSON.stringify(payload))}`;
-    const res = await app().request(
-      new Request("http://localhost/slack/interactions", {
-        method: "POST",
-        headers: sign(body),
-        body,
-      }),
-    );
+    const res = await app().request(generateSubmission(batch!.id));
     return { res, batchId: batch!.id };
   }
 
@@ -310,6 +359,16 @@ describe("the Generate button", () => {
     expect(second).toMatch(/about \d+ minutes/);
   });
 
+  it("says publicly what the batch costs", async () => {
+    // The recap that used to carry this is now private to the uploader, but
+    // the spend is still the team's business.
+    await uploadThenPressGenerate();
+    await drain();
+
+    expect(slack.posts[1]!.text).toMatch(/\$5\.\d\d/);
+    expect(slack.posts[1]!.text).toContain("uni-1-max");
+  });
+
   it("says so in the channel when starting fails, rather than going quiet", async () => {
     slack.files.set(FILE_URL, REAL_CATALOG);
     await app().request(viewSubmission());
@@ -336,21 +395,7 @@ describe("the Generate button", () => {
       },
     });
 
-    const payload = {
-      type: "block_actions",
-      user: { id: "U_ELLIE" },
-      channel: { id: "C_REVIEW" },
-      message: { ts: "1700000000.000100" },
-      actions: [{ action_id: GENERATE_ACTION_ID, value: String(batch!.id) }],
-    };
-    const body = `payload=${encodeURIComponent(JSON.stringify(payload))}`;
-    await brokenApp.request(
-      new Request("http://localhost/slack/interactions", {
-        method: "POST",
-        headers: sign(body),
-        body,
-      }),
-    );
+    await brokenApp.request(generateSubmission(batch!.id));
     await drain();
 
     // The construction failure is swallowed inside startGeneration, so the
@@ -379,7 +424,7 @@ describe("the Generate button", () => {
 
     const mentions = slack.posts.filter((p) => p.text.includes("<@U_ELLIE>"));
     expect(mentions).toHaveLength(1);
-    expect(slack.posts.at(-1)!.text).toContain("Approve or a Discard");
+    expect(slack.posts.at(-1)!.text).toContain("approve or a discard");
   });
 
   it("charges nothing for the products with no shot idea", async () => {

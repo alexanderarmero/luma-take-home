@@ -1,25 +1,23 @@
+import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import type { DbStatus } from "../db/bootstrap.js";
 import {
+  buildCheckingModal,
+  buildIngestErrorModal,
   buildUploadModal,
-  GENERATE_ACTION_ID,
   ingestCatalog,
+  RECAP_CALLBACK_ID,
   UPLOAD_ACTION_ID,
   UPLOAD_BLOCK_ID,
   UPLOAD_CALLBACK_ID,
 } from "../catalog/ingest.js";
 import type { SqlClient } from "../db/client.js";
-import {
-  ensureReviewToken,
-  getImageByObjectKey,
-  setBatchState,
-} from "../db/repository.js";
+import { getImageByObjectKey } from "../db/repository.js";
+import { startBatchAndAnnounce } from "../generation/announce.js";
 import type { ImageGenerator } from "../generation/generator.js";
-import { describeWait } from "../generation/estimate.js";
 import type { BrandContext } from "../generation/brand.js";
 import type { PromptWriter } from "../generation/prompts.js";
-import { startGeneration } from "../generation/start.js";
 import type { ImageModel } from "../pricing.js";
 import { buildStatusSummary } from "../status/status.js";
 import {
@@ -79,6 +77,21 @@ export interface AppDeps {
   publicBaseUrl?: string;
   /** Turns a shot idea into several distinct generation prompts. */
   promptWriterFor?: (brand: BrandContext) => PromptWriter;
+  /**
+   * Names a modal we push but never learn the id of.
+   *
+   * Injected so a test can predict it; in production it is random, because
+   * external ids are workspace-wide and two uploads must not collide.
+   */
+  newExternalId?: () => string;
+}
+
+/**
+ * External ids are unique per workspace, so two uploads in flight at once
+ * must not name the same view.
+ */
+function defaultExternalId(): string {
+  return `luma-${randomUUID()}`;
 }
 
 /** Slack renders this only to the person who typed the command. */
@@ -501,31 +514,71 @@ export function createApp(deps: AppDeps) {
         return c.body(null, 200);
       }
 
+      if (payload.view?.callback_id === RECAP_CALLBACK_ID) {
+        const batchId = Number(payload.view?.private_metadata);
+        const { slack, generator, store, reviewChannelId } = deps;
+
+        if (!slack || !reviewChannelId) return c.body(null, 200);
+        if (!generator || !store) {
+          // A view with no input blocks has nowhere to hang a field error, so
+          // the refusal replaces the view — said where the person is looking
+          // rather than in a channel they may not have open.
+          return c.json({
+            response_action: "update",
+            view: buildIngestErrorModal(
+              `err-${batchId}`,
+              "Generation isn't configured on this instance, so there is " +
+                "nothing to run. Nothing has been charged.",
+            ),
+          });
+        }
+
+        deps.defer(async () => {
+          await startBatchAndAnnounce({
+            db: deps.db,
+            slack,
+            channel: reviewChannelId,
+            batchId,
+            ...(deps.publicBaseUrl ? { publicBaseUrl: deps.publicBaseUrl } : {}),
+            ...(deps.promptWriterFor ? { promptWriterFor: deps.promptWriterFor } : {}),
+            ...(deps.model ? { model: deps.model } : {}),
+          });
+        });
+
+        // An empty 200 closes the whole modal stack.
+        return c.body(null, 200);
+      }
+
       if (payload.view?.callback_id !== UPLOAD_CALLBACK_ID) return c.body(null, 200);
 
       const file =
         payload.view?.state?.values?.[UPLOAD_BLOCK_ID]?.[UPLOAD_ACTION_ID]
           ?.files?.[0];
-      const { slack, reviewChannelId } = deps;
+      const { slack } = deps;
 
-      if (file?.url_private && slack && reviewChannelId) {
-        const channel = reviewChannelId;
-        const url = file.url_private;
-        const name = file.name ?? "catalog.csv";
-        // Downloading and parsing is far too slow for the acknowledgement
-        // window; an empty 200 closes the modal immediately.
-        deps.defer(async () => {
-          await ingestCatalog({
-            slack,
-            db: deps.db,
-            channel,
-            fileUrl: url,
-            filename: name,
-          });
+      if (!file?.url_private || !slack) return c.body(null, 200);
+
+      const url = file.url_private;
+      const name = file.name ?? "catalog.csv";
+      // Reading and parsing the file is far too slow for the three-second
+      // submission window, so the response pushes a view saying so and the
+      // work draws its own outcome into that view when it finishes.
+      const externalId = (deps.newExternalId ?? defaultExternalId)();
+
+      deps.defer(async () => {
+        await ingestCatalog({
+          slack,
+          db: deps.db,
+          externalId,
+          fileUrl: url,
+          filename: name,
         });
-      }
+      });
 
-      return c.body(null, 200);
+      return c.json({
+        response_action: "push",
+        view: buildCheckingModal(externalId),
+      });
     }
 
     if (payload.type !== "block_actions") return c.body(null, 200);
@@ -557,81 +610,6 @@ export function createApp(deps: AppDeps) {
             viewId,
             view: await buildAccessModal(deps.db, deps.approverUserId ?? ""),
           });
-        }
-      });
-
-      return c.body(null, 200);
-    }
-
-    if (action?.action_id === GENERATE_ACTION_ID && deps.slack && channel) {
-      const { slack, generator, store, reviewChannelId } = deps;
-      const batchId = Number(action.value);
-
-      if (!generator || !store || !reviewChannelId) {
-        deps.defer(async () => {
-          await slack.postMessage({
-            channel,
-            text: "Generation isn't configured on this instance.",
-            ...(ts ? { threadTs: ts } : {}),
-          });
-        });
-        return c.body(null, 200);
-      }
-
-      // Announce first, work second. Turning sixteen shot ideas into prompts
-      // is a minute or more of API calls, and doing it before saying anything
-      // leaves the channel silent — indistinguishable from a broken button.
-      deps.defer(async () => {
-        const reviewToken = await ensureReviewToken(deps.db, batchId);
-        const overviewUrl = deps.publicBaseUrl
-          ? `${deps.publicBaseUrl}/review/${reviewToken}`
-          : null;
-
-        try {
-          await slack.postMessage({
-            channel,
-            text: [
-              `*Batch #${batchId} has started.*`,
-              "",
-              "I'm writing the prompts now, then generating. *Nothing will " +
-                "appear straight away* — photos are posted once a product's " +
-                "whole set has finished, so they arrive product by product.",
-              "",
-              "You don't need to wait here — I'll mention you once the whole " +
-                "batch is ready to review.",
-              ...(overviewUrl
-                ? ["", `*Overview page:* ${overviewUrl}`]
-                : []),
-            ].join("\n"),
-          });
-
-          const counts = await startGeneration(deps.db, batchId, {
-            ...(deps.promptWriterFor ? { promptWriterFor: deps.promptWriterFor } : {}),
-            log: (message) => console.log(message),
-          });
-          await setBatchState(deps.db, batchId, "generating");
-
-          const total = counts.styled + counts.passThrough;
-          await slack.postMessage({
-            channel,
-            text:
-              `Generating *${counts.styled}* styled photos and copying ` +
-              `*${counts.passThrough}* originals across — *${total}* to review ` +
-              `in all. This usually takes ${describeWait(total)}.`,
-          });
-        } catch (error) {
-          // Without this the failure reaches stderr and nobody is told, which
-          // looks exactly like a button that does nothing.
-          console.error("[generate] failed", error);
-          await slack
-            .postMessage({
-              channel,
-              text:
-                `I couldn't start batch #${batchId}: ${(error as Error).message}\n` +
-                "Nothing has been charged. Press Generate again, or re-upload " +
-                "the file if it keeps failing.",
-            })
-            .catch(() => {});
         }
       });
 
@@ -688,6 +666,7 @@ interface BlockActionsPayload {
   view?: {
     id?: string;
     callback_id?: string;
+    private_metadata?: string;
     state?: {
       values?: Record<
         string,
