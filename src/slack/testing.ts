@@ -7,6 +7,7 @@ import type {
 
 export interface FakeSlack extends SlackClient {
   posts: PostMessageInput[];
+  ephemerals: Array<{ responseUrl: string; text: string }>;
   updates: UpdateMessageInput[];
   uploads: UploadImageInput[];
   views: Array<{ triggerId: string; view: Record<string, unknown> }>;
@@ -26,6 +27,7 @@ export interface FakeSlack extends SlackClient {
 export function createFakeSlack(): FakeSlack {
   const fake: FakeSlack = {
     posts: [],
+    ephemerals: [],
     updates: [],
     uploads: [],
     views: [],
@@ -46,6 +48,9 @@ export function createFakeSlack(): FakeSlack {
     openView: async (input) => {
       fake.views.push(input);
     },
+    respondEphemeral: async (responseUrl, text) => {
+      fake.ephemerals.push({ responseUrl, text });
+    },
     getFileUrl: async (fileId) =>
       `https://files.slack.com/files-pri/T1-${fileId}/image.jpg`,
     downloadFile: async (url) => {
@@ -59,6 +64,7 @@ export function createFakeSlack(): FakeSlack {
     reset() {
       fake.posts.length = 0;
       fake.updates.length = 0;
+      fake.ephemerals.length = 0;
       fake.uploads.length = 0;
       fake.views.length = 0;
       fake.files.clear();

@@ -37,6 +37,14 @@ export interface SlackClient {
   updateMessage(input: UpdateMessageInput): Promise<void>;
   uploadImage(input: UploadImageInput): Promise<{ fileId: string; ts?: string }>;
   openView(input: { triggerId: string; view: Record<string, unknown> }): Promise<void>;
+  /**
+   * Answers an interaction privately, to the person who clicked only.
+   *
+   * `response_url` is how Slack lets an app reply to a button press without
+   * posting into the channel — which matters for telling someone their action
+   * was refused without announcing it to everyone.
+   */
+  respondEphemeral(responseUrl: string, text: string): Promise<void>;
   /** Fetches a file Slack is hosting privately. Returns its text. */
   downloadFile(urlPrivate: string): Promise<string>;
   /**
@@ -178,6 +186,19 @@ export function createSlackClient(options: SlackClientOptions): SlackClient {
       // a missing ts is recoverable, a crash here is not.
       const ts = channel ? extractShareTs(completed, channel) : undefined;
       return ts === undefined ? { fileId } : { fileId, ts };
+    },
+
+    async respondEphemeral(responseUrl, text) {
+      // response_url is a plain webhook, not a Slack API method: it answers
+      // with a bare "ok" body rather than the usual {ok: true} envelope.
+      const response = await doFetch(responseUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ response_type: "ephemeral", text }),
+      });
+      if (!response.ok) {
+        throw new Error(`Slack response_url failed: HTTP ${response.status}`);
+      }
     },
 
     async getFileUrl(fileId) {

@@ -584,13 +584,21 @@ export async function getProductImages(
     failure_code: string | null;
     product_name: string;
     shot_idea: string | null;
+    decision: string | null;
   }>(
     `select i.id as image_id, i.slot, i.filename, i.prompt, i.kind,
             i.object_key, j.state, j.failure_code,
-            i.product_name, r.shot_idea
+            i.product_name, r.shot_idea,
+            case
+              when a.image_id is not null then 'approved'
+              when d.image_id is not null then 'discarded'
+              else null
+            end as decision
        from images i
-       join image_jobs j on j.image_id = i.id
-       join batch_rows r on r.batch_id = i.batch_id and r.sku = i.sku
+       join image_jobs j            on j.image_id = i.id
+       join batch_rows r            on r.batch_id = i.batch_id and r.sku = i.sku
+       left join approved_images a  on a.image_id = i.id
+       left join discarded_images d on d.image_id = i.id
       where i.batch_id = $1 and i.sku = $2
       order by i.slot asc`,
     [batchId, sku],
@@ -608,6 +616,7 @@ export async function getProductImages(
       objectKey: r.object_key,
       jobState: r.state,
       failureCode: r.failure_code,
+      decision: (r.decision as "approved" | "discarded" | null) ?? null,
     })),
   };
 }
@@ -768,4 +777,60 @@ export async function getBatchProducts(
   }
 
   return [...products.values()];
+}
+
+export interface ImageLocation {
+  imageId: string;
+  batchId: number;
+  sku: string;
+  filename: string;
+  /** The candidate's own message, inside the product's thread. */
+  messageTs: string | null;
+  /** The product's line in the channel. */
+  productMessageTs: string | null;
+}
+
+/** Where an image is, so its decision can be reflected back into Slack. */
+export async function getImageLocation(
+  db: SqlClient,
+  imageId: string,
+): Promise<ImageLocation | null> {
+  const { rows } = await db.query<{
+    image_id: string;
+    batch_id: string;
+    sku: string;
+    filename: string;
+    message_ts: string | null;
+    product_message_ts: string | null;
+  }>(
+    `select i.id as image_id, i.batch_id, i.sku, i.filename, i.message_ts,
+            r.message_ts as product_message_ts
+       from images i
+       join batch_rows r on r.batch_id = i.batch_id and r.sku = i.sku
+      where i.id = $1`,
+    [imageId],
+  );
+
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    imageId: row.image_id,
+    batchId: Number(row.batch_id),
+    sku: row.sku,
+    filename: row.filename,
+    messageTs: row.message_ts,
+    productMessageTs: row.product_message_ts,
+  };
+}
+
+/** True once a batch has been confirmed, after which it is frozen. */
+export async function isBatchFrozen(
+  db: SqlClient,
+  batchId: number,
+): Promise<boolean> {
+  const { rows } = await db.query<{ state: string }>(
+    `select state from batches where id = $1`,
+    [batchId],
+  );
+  return rows[0]?.state === "delivered";
 }

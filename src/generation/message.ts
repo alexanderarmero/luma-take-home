@@ -105,6 +105,25 @@ export function buildCandidateBlocks(image: ProductImage): Block[] {
     });
   }
 
+  // A decided candidate keeps its outcome and loses its buttons. Leaving them
+  // would make a settled image look undecided, which is the whole reason the
+  // thread is readable as a work queue.
+  if (image.decision) {
+    blocks.push({
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text:
+            image.decision === "approved"
+              ? ":white_check_mark: *Approved*"
+              : ":x: *Discarded*",
+        },
+      ],
+    });
+    return blocks;
+  }
+
   blocks.push({
     type: "actions",
     elements: [

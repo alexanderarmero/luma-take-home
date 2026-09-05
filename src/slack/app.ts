@@ -19,6 +19,11 @@ import { describeWait } from "../generation/estimate.js";
 import { startGeneration } from "../generation/start.js";
 import type { ImageModel } from "../pricing.js";
 import { buildStatusSummary } from "../status/status.js";
+import { decide } from "../decisions/decide.js";
+import {
+  APPROVE_ACTION_ID,
+  DISCARD_ACTION_ID,
+} from "../generation/message.js";
 import { renderReviewPage } from "../review/page.js";
 import { buildReviewState } from "../review/state.js";
 import type { ObjectStore } from "../storage/store.js";
@@ -269,6 +274,41 @@ export function createApp(deps: AppDeps) {
     const ts = payload.message?.ts;
     const userId = payload.user?.id;
 
+    const isDecision =
+      action?.action_id === APPROVE_ACTION_ID ||
+      action?.action_id === DISCARD_ACTION_ID;
+
+    if (isDecision && deps.slack && deps.reviewChannelId && action.value) {
+      const { slack, reviewChannelId, approverUserId } = deps;
+      const imageId = action.value;
+      const decision =
+        action.action_id === APPROVE_ACTION_ID ? "approve" : "discard";
+      const responseUrl = payload.response_url;
+
+      // Recording and redrawing both take longer than the acknowledgement
+      // window allows, so the click is answered first and the work follows.
+      deps.defer(async () => {
+        const outcome = await decide({
+          db: deps.db,
+          slack,
+          channel: reviewChannelId,
+          imageId,
+          decision,
+          actorUserId: userId ?? "",
+          approverUserId: approverUserId ?? "",
+          log: (message) => console.log(message),
+        });
+
+        // A refusal is told only to the person who clicked. Announcing it to
+        // the channel would be a public correction of a private mistake.
+        if (!outcome.ok && responseUrl) {
+          await slack.respondEphemeral(responseUrl, outcome.reason);
+        }
+      });
+
+      return c.body(null, 200);
+    }
+
     if (action?.action_id === GENERATE_ACTION_ID && deps.slack && channel) {
       const { slack, generator, store, reviewChannelId } = deps;
       const batchId = Number(action.value);
@@ -354,6 +394,7 @@ interface SlackFile {
 
 interface BlockActionsPayload {
   type?: string;
+  response_url?: string;
   user?: { id?: string };
   channel?: { id?: string };
   message?: { ts?: string };

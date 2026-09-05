@@ -13,15 +13,15 @@ submitter must discover the account's real ceilings rather than depend on a conf
 
 **Blocked by:** 06
 
-**Status:** ready-for-agent
+**Status:** done (2026-09-04)
 
-- [ ] Every row carrying a Shot Idea is generated; the batch runs to completion unattended
-- [ ] A row with a blank Shot Idea has its original photo downloaded, stored, named and posted with no generation call and no cost
-- [ ] A pass-through message states plainly that the photo is the original and no shot idea was given, rather than showing an empty prompt
-- [ ] A pass-through filename is distinguishable from a styled one, so the web person never has to guess whether a photo was modified
-- [ ] A product's candidates appear adjacently and in index order regardless of the order in which they completed
-- [ ] Posting is paced to stay within the messaging limit and does not stall the pipeline
-- [ ] A single summary message mentions the reviewer; the candidate stream posts without mentions
-- [ ] The summary reports the batch's image count and cost
-- [ ] Killing the service mid-batch and restarting it resumes the batch and finishes it, with no image submitted twice outside the documented crash window
-- [ ] Concurrency and per-minute ceilings are read from response headers and respected adaptively, starting conservative
+- [x] Every row carrying a Shot Idea is generated; the batch runs to completion unattended
+- [x] A row with a blank Shot Idea has its original photo downloaded, stored, named and posted with no generation call and no cost
+- [x] A pass-through message states plainly that the photo is the original and no shot idea was given, rather than showing an empty prompt
+- [x] A pass-through filename is distinguishable from a styled one, so the web person never has to guess whether a photo was modified
+- [x] A product's candidates appear adjacently and in index order regardless of the order in which they completed
+- [x] Posting is paced to stay within the messaging limit and does not stall the pipeline
+- [x] A single summary message mentions the reviewer; the candidate stream posts without mentions
+- [x] The summary reports the batch's image count and cost
+- [x] Killing the service mid-batch and restarting it resumes the batch and finishes it, with no image submitted twice outside the documented crash window
+- [x] Concurrency and per-minute ceilings are read from response headers and respected adaptively, starting conservative
