@@ -887,3 +887,53 @@ export async function getApprovedImages(
     checksum: r.checksum,
   }));
 }
+
+/**
+ * Counts over the images that can actually be decided.
+ *
+ * An image whose generation failed is never posted with buttons, so it can
+ * never enter either relation. Counting it as outstanding leaves a batch
+ * permanently unconfirmable — and makes this disagree with `/luma status`,
+ * which has always excluded failures.
+ */
+export async function batchDecisionCounts(
+  db: SqlClient,
+  batchId: number,
+): Promise<{ decidable: number; approved: number; discarded: number; pending: number }> {
+  const { rows } = await db.query<{
+    decidable: string;
+    approved: string;
+    discarded: string;
+  }>(
+    `select
+       (select count(*) from image_jobs      where batch_id = $1 and state <> 'failed') as decidable,
+       (select count(*) from approved_images where batch_id = $1) as approved,
+       (select count(*) from discarded_images where batch_id = $1) as discarded`,
+    [batchId],
+  );
+
+  const row = rows[0]!;
+  const decidable = Number(row.decidable);
+  const approved = Number(row.approved);
+  const discarded = Number(row.discarded);
+  return { decidable, approved, discarded, pending: decidable - approved - discarded };
+}
+
+/**
+ * Moves a batch's state only if it is where we expect.
+ *
+ * Returns false when it was not, which makes a read-then-write pair safe
+ * against two deferred tasks arriving together.
+ */
+export async function transitionBatchState(
+  db: SqlClient,
+  batchId: number,
+  from: string,
+  to: string,
+): Promise<boolean> {
+  const { rows } = await db.query<{ id: string }>(
+    `update batches set state = $3 where id = $1 and state = $2 returning id`,
+    [batchId, from, to],
+  );
+  return rows.length > 0;
+}

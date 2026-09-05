@@ -125,7 +125,6 @@ export function createApp(deps: AppDeps) {
                 ...(deps.slack ? { slack: deps.slack } : {}),
                 ...(deps.reviewChannelId ? { channel: deps.reviewChannelId } : {}),
                 ...(deps.publicBaseUrl ? { publicBaseUrl: deps.publicBaseUrl } : {}),
-                pendingOnly: (params.get("text") ?? "").includes("pending"),
               }),
             ),
           );
@@ -163,12 +162,13 @@ export function createApp(deps: AppDeps) {
         // Fetching every approved image and zipping it is far too slow for the
         // acknowledgement window.
         deps.defer(async () => {
-          const result = await buildLatestExport(deps.db, store);
-          if (!result.ok) {
-            await slack.postMessage({ channel: reviewChannelId, text: result.reason });
-            return;
-          }
-          await slack.uploadFile({
+          try {
+            const result = await buildLatestExport(deps.db, store);
+            if (!result.ok) {
+              await slack.postMessage({ channel: reviewChannelId, text: result.reason });
+              return;
+            }
+            await slack.uploadFile({
             channel: reviewChannelId,
             filename: result.filename,
             title: result.filename,
@@ -182,11 +182,22 @@ export function createApp(deps: AppDeps) {
                     `*Batch #${result.batchId} — ${result.count} approved ` +
                     `${result.count === 1 ? "photo" : "photos"}.*\nEvery file is named ` +
                     "for its product and shot idea. MANIFEST.txt lists them with " +
-                    "their checksums.",
+                      "their checksums.",
+                  },
                 },
-              },
-            ],
-          });
+              ],
+            });
+          } catch (error) {
+            // Silence here leaves the reviewer waiting for a zip that is never
+            // coming, with nothing to act on.
+            console.error("[/luma export] failed", error);
+            await slack.postMessage({
+              channel: reviewChannelId,
+              text:
+                "I couldn't build the export just now — the photos are all still " +
+                "stored, so try `/luma export` again in a moment.",
+            });
+          }
         });
         return c.json(ephemeral("Putting the zip together…"));
       }
@@ -328,12 +339,17 @@ export function createApp(deps: AppDeps) {
       const responseUrl = payload.response_url;
 
       deps.defer(async () => {
-        const outcome = await confirmBatch({
-          db: deps.db,
-          batchId,
-          actorUserId: userId ?? "",
-          approverUserId: approverUserId ?? "",
-        });
+        // Fail closed: two missing values must not compare equal and let an
+        // unidentified click through the only authorisation in this path.
+        const outcome =
+          userId && approverUserId
+            ? await confirmBatch({
+                db: deps.db,
+                batchId,
+                actorUserId: userId,
+                approverUserId,
+              })
+            : ({ ok: false, reason: "I can't tell who you are." } as const);
 
         if (!outcome.ok) {
           if (responseUrl) await slack.respondEphemeral(responseUrl, outcome.reason);
@@ -382,16 +398,20 @@ export function createApp(deps: AppDeps) {
       // Recording and redrawing both take longer than the acknowledgement
       // window allows, so the click is answered first and the work follows.
       deps.defer(async () => {
-        const outcome = await decide({
-          db: deps.db,
-          slack,
-          channel: reviewChannelId,
-          imageId,
-          decision,
-          actorUserId: userId ?? "",
-          approverUserId: approverUserId ?? "",
-          log: (message) => console.log(message),
-        });
+        // Fail closed, as above.
+        const outcome =
+          userId && approverUserId
+            ? await decide({
+                db: deps.db,
+                slack,
+                channel: reviewChannelId,
+                imageId,
+                decision,
+                actorUserId: userId,
+                approverUserId,
+                log: (message) => console.log(message),
+              })
+            : ({ ok: false, reason: "I can't tell who you are." } as const);
 
         // A refusal is told only to the person who clicked. Announcing it to
         // the channel would be a public correction of a private mistake.

@@ -1,9 +1,10 @@
 import type { SqlClient } from "../db/client.js";
 import {
-  batchCounts,
-  getDeliveredBatchId,
+  batchDecisionCounts,
+  getBatchState,
   setBatchState,
   setDeliveredBatch,
+  transitionBatchState,
 } from "../db/repository.js";
 import type { Block, SlackClient } from "../slack/client.js";
 
@@ -75,19 +76,31 @@ export async function offerConfirmationIfComplete(input: {
 }): Promise<boolean> {
   const { db, slack, channel, batchId, batchState, approverUserId } = input;
 
-  // Only from ready_for_review: the transition is the guard against offering
-  // the same batch twice.
   if (batchState !== "ready_for_review") return false;
 
-  const counts = await batchCounts(db, batchId);
-  if (counts.total === 0 || counts.pending > 0) return false;
+  const counts = await batchDecisionCounts(db, batchId);
+  if (counts.decidable === 0 || counts.pending > 0) return false;
 
-  await setBatchState(db, batchId, "complete");
-  await slack.postMessage({
-    channel,
-    text: `Batch #${batchId} is fully decided and ready to confirm.`,
-    blocks: confirmBlocks(batchId, counts),
-  });
+  // Claim the transition first, and only then post. The conditional update is
+  // what makes two decisions arriving together produce one button rather than
+  // two.
+  if (!(await transitionBatchState(db, batchId, "ready_for_review", "complete"))) {
+    return false;
+  }
+
+  try {
+    await slack.postMessage({
+      channel,
+      text: `Batch #${batchId} is fully decided and ready to confirm.`,
+      blocks: confirmBlocks(batchId, counts),
+    });
+  } catch (error) {
+    // Put the state back, or the batch is left with no button and no way to
+    // ever get one.
+    await setBatchState(db, batchId, "ready_for_review");
+    throw error;
+  }
+
   void approverUserId;
   return true;
 }
@@ -114,12 +127,14 @@ export async function confirmBatch(input: {
     return { ok: false, reason: "Only Ellie can confirm a batch." };
   }
 
-  const alreadyDelivered = await getDeliveredBatchId(db);
-  if (alreadyDelivered === batchId) {
+  // Guarded on the batch's own state, not on where the pointer happens to be.
+  // A confirm message stays in the channel with a live button, and clicking an
+  // old one must not drag the pointer back to a superseded batch.
+  if ((await getBatchState(db, batchId)) === "delivered") {
     return { ok: false, reason: `Batch #${batchId} has already been confirmed.` };
   }
 
-  const counts = await batchCounts(db, batchId);
+  const counts = await batchDecisionCounts(db, batchId);
   if (counts.pending > 0) {
     return {
       ok: false,

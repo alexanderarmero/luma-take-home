@@ -215,3 +215,45 @@ describe("the overview link", () => {
     expect(await status()).not.toContain("Overview:");
   });
 });
+
+describe("regressions found in review", () => {
+  it("does not call a photo still being generated 'still to review'", async () => {
+    // Otherwise a batch mid-generation tells the reviewer to go and look at
+    // photographs that are not there yet.
+    const { batch } = await batchWith([{ sku: "HG-002", slots: 3 }]);
+    await db.query(`update image_jobs set state = 'submitted' where batch_id = $1`, [
+      batch.id,
+    ]);
+
+    const text = await status();
+    expect(text).toContain("0 still to review");
+    expect(text).not.toContain("Still needing you");
+  });
+
+  it("counts spend from submission, not from the row existing", async () => {
+    const { batch } = await batchWith([{ sku: "HG-002", slots: 3 }]);
+    await db.query(`update image_jobs set state = 'pending_submit' where batch_id = $1`, [
+      batch.id,
+    ]);
+    expect(await status()).toContain("$0.00 spent");
+  });
+
+  it("fetches the deep links in parallel, so the listing fits the ack window", async () => {
+    // A dozen sequential round trips does not fit inside three seconds.
+    let inFlight = 0;
+    let peak = 0;
+    slack.getPermalink = async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight -= 1;
+      return "https://example.slack.com/archives/C/p1";
+    };
+
+    await batchWith(
+      Array.from({ length: 5 }, (_, i) => ({ sku: `HG-00${i + 1}`, slots: 1 })),
+    );
+    await status();
+    expect(peak).toBeGreaterThan(1);
+  });
+});

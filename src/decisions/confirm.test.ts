@@ -7,6 +7,7 @@ import {
   getBatchState,
   recordDecision,
   setBatchState,
+  setJobState,
 } from "../db/repository.js";
 import { createTestDb, type TestDb } from "../db/testing.js";
 import { createFakeSlack, type FakeSlack } from "../slack/testing.js";
@@ -172,5 +173,63 @@ describe("confirming", () => {
     const second = await reviewableBatch();
     expect(second.batch.id).toBeGreaterThan(first.batch.id);
     expect(await getDeliveredBatchId(db)).toBe(first.batch.id);
+  });
+});
+
+describe("regressions found in review", () => {
+  const confirm = (batchId: number, actor = ELLIE) =>
+    confirmBatch({ db, batchId, actorUserId: actor, approverUserId: ELLIE });
+
+  it("can still be confirmed when a photo failed to generate", async () => {
+    // A failed image never gets buttons, so it can never be decided. Counting
+    // it as outstanding leaves the batch permanently unconfirmable — and
+    // `/luma status` says the opposite, because it excludes failures.
+    const { batch, imageIds } = await reviewableBatch(3);
+    await setJobState(db, imageIds[2]!, "failed", { failureCode: "content_moderated" });
+    await decideAll(imageIds.slice(0, 2));
+
+    expect(await offer(batch.id, "ready_for_review")).toBe(true);
+    expect(await confirm(batch.id)).toMatchObject({ ok: true });
+  });
+
+  it("never moves the delivered pointer backwards", async () => {
+    // A confirm message stays in the channel with a live button. Clicking an
+    // old one must not hand the web person a superseded batch.
+    const first = await reviewableBatch(1);
+    await decideAll(first.imageIds);
+    await confirm(first.batch.id);
+
+    const second = await reviewableBatch(1);
+    await decideAll(second.imageIds);
+    await confirm(second.batch.id);
+    expect(await getDeliveredBatchId(db)).toBe(second.batch.id);
+
+    // The stale button from the first batch.
+    expect(await confirm(first.batch.id)).toMatchObject({ ok: false });
+    expect(await getDeliveredBatchId(db)).toBe(second.batch.id);
+  });
+
+  it("can still offer confirmation after a failed post", async () => {
+    // Moving the state before the message goes out leaves the batch with no
+    // button and no way to get one.
+    const { batch, imageIds } = await reviewableBatch(1);
+    await decideAll(imageIds);
+
+    slack.postMessage = async () => {
+      throw new Error("ratelimited");
+    };
+    await expect(offer(batch.id, "ready_for_review")).rejects.toThrow();
+
+    slack = createFakeSlack();
+    expect(
+      await offerConfirmationIfComplete({
+        db,
+        slack,
+        channel: "C_REVIEW",
+        batchId: batch.id,
+        batchState: await getBatchState(db, batch.id),
+        approverUserId: ELLIE,
+      }),
+    ).toBe(true);
   });
 });

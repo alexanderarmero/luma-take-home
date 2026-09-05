@@ -12,13 +12,16 @@ import type { SlackClient } from "../slack/client.js";
 /** Beyond this the listing stops being readable and starts being a wall. */
 const MAX_LISTED = 12;
 
+/** Only a photo that has been posted carries buttons to decide with. */
+function isDecidable(jobState: string): boolean {
+  return jobState === "posted" || jobState === "stored";
+}
+
 export interface StatusInput {
   db: SqlClient;
   slack?: SlackClient;
   channel?: string;
   publicBaseUrl?: string;
-  /** Show only what still needs a decision. */
-  pendingOnly?: boolean;
 }
 
 /**
@@ -30,7 +33,7 @@ export interface StatusInput {
  * things stand without having to ask her.
  */
 export async function buildStatusSummary(input: StatusInput): Promise<string> {
-  const { db, slack, channel, publicBaseUrl, pendingOnly } = input;
+  const { db, slack, channel, publicBaseUrl } = input;
 
   const batch = await getLatestBatch(db);
   if (!batch) return "No batches yet. Upload a catalog to get started.";
@@ -48,11 +51,19 @@ export async function buildStatusSummary(input: StatusInput): Promise<string> {
 
   for (const product of products) {
     for (const image of product.images) {
-      if (image.kind === "styled") generated += 1;
+      // Billed from the moment it is submitted, not from the moment the row
+      // exists — otherwise the whole batch reads as spent the instant Generate
+      // is pressed.
+      if (image.kind === "styled" && image.jobState !== "pending_submit") {
+        generated += 1;
+      }
       if (image.jobState === "failed") continue;
       if (image.decision === "approved") approved += 1;
       else if (image.decision === "discarded") discarded += 1;
-      else pending += 1;
+      // Only a photo that has actually been posted can be decided on. Counting
+      // one still being generated as "still to review" tells the reviewer to
+      // go and look at something that is not there yet.
+      else if (isDecidable(image.jobState)) pending += 1;
     }
   }
 
@@ -73,31 +84,37 @@ export async function buildStatusSummary(input: StatusInput): Promise<string> {
     lines.push("", ":hourglass: Everything is decided — *awaiting your confirmation*.");
   }
 
-  const needing = products.filter((p) =>
-    p.images.some((i) => i.jobState !== "failed" && i.decision == null),
+  const listed = products.filter((p) =>
+    p.images.some((i) => isDecidable(i.jobState) && i.decision == null),
   );
-  const listed = pendingOnly ? needing : needing;
 
   if (listed.length > 0) {
     lines.push("", `*Still needing you (${listed.length}):*`);
 
-    for (const product of listed.slice(0, MAX_LISTED)) {
-      const outstanding = product.images.filter(
-        (i) => i.jobState !== "failed" && i.decision == null,
-      ).length;
+    const shown = listed.slice(0, MAX_LISTED);
 
-      let link: string | undefined;
-      if (slack && channel && product.messageTs) {
+    // In parallel, not one after another. A slash command must be answered
+    // within three seconds, and a dozen sequential round trips does not fit.
+    const links = await Promise.all(
+      shown.map(async (product) => {
+        if (!slack || !channel || !product.messageTs) return undefined;
         try {
-          link = await slack.getPermalink(channel, product.messageTs);
+          return await slack.getPermalink(channel, product.messageTs);
         } catch {
           // A missing link costs a tap, not the listing.
+          return undefined;
         }
-      }
+      }),
+    );
 
+    shown.forEach((product, index) => {
+      const outstanding = product.images.filter(
+        (i) => isDecidable(i.jobState) && i.decision == null,
+      ).length;
       const label = `${product.sku} · ${product.productName} (${outstanding} left)`;
+      const link = links[index];
       lines.push(link ? `• <${link}|${label}>` : `• ${label}`);
-    }
+    });
 
     if (listed.length > MAX_LISTED) {
       lines.push(`…and ${listed.length - MAX_LISTED} more.`);
@@ -107,7 +124,9 @@ export async function buildStatusSummary(input: StatusInput): Promise<string> {
   // Under-delivery said out loud. Silence would look identical to success.
   const short = products.filter((p) => {
     const approvedHere = p.images.filter((i) => i.decision === "approved").length;
-    const settled = p.images.every((i) => i.jobState === "failed" || i.decision != null);
+    const settled = p.images.every(
+      (i) => !isDecidable(i.jobState) || i.decision != null,
+    );
     return settled && approvedHere < 2 && p.images.some((i) => i.kind === "styled");
   });
 
