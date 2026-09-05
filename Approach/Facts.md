@@ -527,3 +527,45 @@ every image anyway (D32), so the proxy is not on the hot path for review. **Name
 discovered later.**
 
 **Verdict: compatible.** One code change (URL style), no design change.
+
+---
+
+## F12 — Images in a Slack message (measured 2026-09-05, probe 4)
+
+Run against the real workspace via `/luma verify`, bisected one variable per message.
+
+| Probe | Form | Result |
+|---|---|---|
+| **4a** | one `image` block, public `image_url` | ✅ **renders** |
+| **4b** | one `image` block, `slack_file: {id}` | ❌ `invalid slack file [json-pointer:/blocks/0/slack_file.id/slack_file]` |
+| **4c** | one `image` block, `slack_file: {url}` | ❌ `invalid slack file [json-pointer:/blocks/0/slack_file.url/slack_file]` |
+| **4d** | **two images, a button under each, public URLs** | ✅ **renders** |
+
+**F12.1 — A file that was never shared to a channel cannot be referenced by an `image` block**,
+by id or by private url. Both forms fail identically, which rules out the reference *form*
+and points at the file's *state*. Slack's documentation for `slack_file` does not mention
+this precondition.
+
+**F12.2 — ⭐ The batched review layout works.** Several images in one message, each with its
+own Approve/Discard directly beneath it, renders correctly — using public `image_url`.
+
+**F12.3 — The consequence: batching requires reversing D32.** Image bytes would be
+*referenced* from our own `/img/:id` endpoint rather than *held* by Slack. D32 chose the
+opposite on the grounds that the channel is the permanent record and should not break if our
+storage does.
+
+**How much that actually costs, honestly.** Less than D32 assumed, because **D2.6 already
+establishes that Slack is the interface and never the datastore** — every decision lives in
+Postgres, and every image lives in our bucket under a checksum. What a storage outage would
+break is the *rendering* of a channel, not the record of what was decided. And the images
+are recoverable: they are still in the bucket, so a broken channel can be re-posted.
+
+**The residual risk, stated plainly:** a channel of broken images looks alarming to a
+non-technical team even when nothing is actually lost, and it makes the product look
+unreliable at exactly the moment it is under scrutiny.
+
+**F12.4 — The road not taken here:** sharing all three files to the channel in a single
+multi-file message, which would keep bytes in Slack. Rejected without probing because the
+images would render as attachments rather than interleaved blocks — the buttons could not sit
+under the image they belong to, and mapping them by label ("Approve 1", "Approve 2") gives
+back the ambiguity that batching exists to remove.
