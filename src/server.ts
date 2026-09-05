@@ -5,6 +5,7 @@ import { createPostgresClient } from "./db/postgres.js";
 import { describeDatabaseUrl } from "./db/redact.js";
 import { createApp } from "./slack/app.js";
 import { createLumaGenerator } from "./generation/generator.js";
+import { createPromptWriter } from "./generation/prompts.js";
 import { startWorkerLoop } from "./generation/loop.js";
 import { createSlackClient } from "./slack/client.js";
 import { createS3ObjectStore } from "./storage/s3.js";
@@ -35,6 +36,12 @@ const app = createApp({
   generator,
   store,
   publicBaseUrl: config.publicBaseUrl,
+  ...(config.anthropicApiKey
+    ? {
+        promptWriterFor: (brand) =>
+          createPromptWriter({ apiKey: config.anthropicApiKey!, brand }),
+      }
+    : {}),
 });
 
 // The HTTP server comes up first, deliberately.

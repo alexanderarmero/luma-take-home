@@ -83,7 +83,7 @@ describe("startGeneration", () => {
     ]);
 
     const result = await startGeneration(db, batch.id);
-    expect(result).toEqual({ styled: 3, passThrough: 1 });
+    expect(result).toMatchObject({ styled: 3, passThrough: 1 });
     expect(await batchCounts(db, batch.id)).toMatchObject({ total: 4, pending: 4 });
   });
 

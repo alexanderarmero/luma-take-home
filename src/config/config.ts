@@ -4,6 +4,8 @@ export interface Config {
   /** Where Slack fetches our images from. The deployed service's own URL. */
   publicBaseUrl: string;
   lumaApiKey: string;
+  /** Optional: without it, shot ideas go to the image model unchanged. */
+  anthropicApiKey?: string;
   storage: {
     bucket: string;
     region: string;
@@ -64,6 +66,9 @@ export function loadConfig(env: Env): Config {
     // Trailing slash removed once here rather than at every use site.
     publicBaseUrl: env.PUBLIC_BASE_URL!.trim().replace(/\/+$/, ""),
     lumaApiKey: env.LUMA_AGENTS_API_KEY!.trim(),
+    ...(env.ANTHROPIC_API_KEY?.trim()
+      ? { anthropicApiKey: env.ANTHROPIC_API_KEY.trim() }
+      : {}),
     storage: {
       bucket: env.S3_BUCKET!.trim(),
       // Railway and R2 both ignore the region while the SDK insists on one;
