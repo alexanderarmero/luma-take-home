@@ -17,7 +17,8 @@ export interface UpdateMessageInput {
 }
 
 export interface UploadImageInput {
-  channel: string;
+  /** Omit to upload without sharing: the file is hosted but stays private. */
+  channel?: string;
   filename: string;
   title: string;
   bytes: Buffer;
@@ -34,7 +35,9 @@ export interface UploadImageInput {
 export interface SlackClient {
   postMessage(input: PostMessageInput): Promise<{ ts: string }>;
   updateMessage(input: UpdateMessageInput): Promise<void>;
-  uploadImage(input: UploadImageInput): Promise<{ fileId: string; ts?: string }>;
+  uploadImage(
+    input: UploadImageInput,
+  ): Promise<{ fileId: string; ts?: string; urlPrivate?: string }>;
   openView(input: { triggerId: string; view: Record<string, unknown> }): Promise<void>;
   /** Fetches a file Slack is hosting privately. Returns its text. */
   downloadFile(urlPrivate: string): Promise<string>;
@@ -137,8 +140,10 @@ export function createSlackClient(options: SlackClientOptions): SlackClient {
 
       const form = new URLSearchParams({
         files: JSON.stringify([{ id: fileId, title }]),
-        channel_id: channel,
       });
+      // Without a channel the file is hosted but not shared anywhere, which is
+      // what an image block referencing it by id needs.
+      if (channel) form.set("channel_id", channel);
       if (blocks) form.set("blocks", JSON.stringify(blocks));
       if (threadTs) form.set("thread_ts", threadTs);
 
@@ -148,8 +153,17 @@ export function createSlackClient(options: SlackClientOptions): SlackClient {
       // once a decision is made. Slack nests it under the file's shares, and
       // the shape varies by channel visibility, so it is read defensively —
       // a missing ts is recoverable, a crash here is not.
-      const ts = extractShareTs(completed, channel);
-      return ts === undefined ? { fileId } : { fileId, ts };
+      const ts = channel ? extractShareTs(completed, channel) : undefined;
+      const urlPrivate = (
+        (completed.files as Array<Record<string, unknown>> | undefined)?.[0]
+          ?.url_private as string | undefined
+      );
+
+      return {
+        fileId,
+        ...(ts === undefined ? {} : { ts }),
+        ...(urlPrivate === undefined ? {} : { urlPrivate }),
+      };
     },
 
     async openView({ triggerId, view }) {
