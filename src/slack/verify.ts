@@ -131,18 +131,49 @@ export async function runVerificationProbes(
   }
 
   // F8.6 — can several images live in ONE message, each with its own buttons?
-  // This is the shape the batched review needs: three candidates for a product
-  // in a single post rather than three posts. It hinges on whether an image
-  // block can reference a Slack-hosted file, and the docs do not say whether a
-  // file that was never shared to a channel can be referenced by id.
+  // This is the shape the batched review needs.
   //
-  // Both documented forms are tried in the same message, so one look tells us
-  // which works: the first image by `id`, the second by `url`.
+  // Deliberately two separate messages, one per reference form. The first
+  // attempt combined them, one block was malformed, and Slack rejected the
+  // whole message — so the form that would have worked never rendered and the
+  // probe answered nothing. A probe that can fail as a unit is not a probe.
+  const byId = await probeImagesInOneMessage(slack, doFetch, input.channel, "id");
+  (byId.ok ? posted : failures).push(`4a · two images in one message, by file id${byId.detail}`);
+
+  const byUrl = await probeImagesInOneMessage(slack, doFetch, input.channel, "url");
+  (byUrl.ok ? posted : failures).push(`4b · two images in one message, by private url${byUrl.detail}`);
+
+  return { posted, failures };
+}
+
+/**
+ * Posts one message holding two images with a button under each, referencing
+ * the files either by id or by private url.
+ */
+async function probeImagesInOneMessage(
+  slack: SlackClient,
+  doFetch: typeof fetch,
+  channel: string,
+  form: "id" | "url",
+): Promise<{ ok: boolean; detail: string }> {
   try {
-    const [first, second] = await Promise.all([
-      uploadPrivately(slack, doFetch, SAMPLE_PHOTO, "HG-002_probe_a.jpg"),
-      uploadPrivately(slack, doFetch, SAMPLE_PHOTO_2, "HG-005_probe_b.jpg"),
+    const uploads = await Promise.all([
+      uploadPrivately(slack, doFetch, SAMPLE_PHOTO, `probe4${form}_a.jpg`),
+      uploadPrivately(slack, doFetch, SAMPLE_PHOTO_2, `probe4${form}_b.jpg`),
     ]);
+
+    const references: Array<Record<string, string>> = [];
+    for (const upload of uploads) {
+      if (form === "id") {
+        references.push({ id: upload.fileId });
+        continue;
+      }
+      const url = await slack.getFileUrl(upload.fileId);
+      // Never emit a half-built block: Slack rejects the entire message, and
+      // the failure names the message rather than the field.
+      if (!url) throw new Error("files.info returned no url_private");
+      references.push({ url });
+    }
 
     const blocks: Block[] = [
       {
@@ -150,60 +181,53 @@ export async function runVerificationProbes(
         text: {
           type: "mrkdwn",
           text:
-            "*Probe 4 · several images in one message*\n" +
-            "This is the shape a batched review would take. Two things to look " +
-            "for: do *both* images appear, and does each button sit under its " +
-            "own image?",
+            `*Probe 4${form === "id" ? "a" : "b"} · two images in one message ` +
+            `(by file ${form})*\nBoth images should appear, each with its own ` +
+            `button directly underneath.`,
         },
       },
-      {
-        type: "image",
-        alt_text: "First probe image, referenced by file id",
-        title: { type: "plain_text", text: "By file id" },
-        slack_file: { id: first.fileId },
-      },
-      ...probeButtons("probe-4-by-id"),
-      {
-        type: "image",
-        alt_text: "Second probe image, referenced by private url",
-        title: { type: "plain_text", text: "By private url" },
-        slack_file: { url: second.urlPrivate },
-      },
-      ...probeButtons("probe-4-by-url"),
     ];
 
+    references.forEach((reference, index) => {
+      blocks.push({
+        type: "image",
+        alt_text: `Probe image ${index + 1}`,
+        title: { type: "plain_text", text: `Image ${index + 1}` },
+        slack_file: reference,
+      });
+      blocks.push(...probeButtons(`probe-4${form}-${index + 1}`));
+    });
+
     await slack.postMessage({
-      channel: input.channel,
-      text: "Probe 4 of 4 — several images in one message.",
+      channel,
+      text: `Probe 4${form === "id" ? "a" : "b"} — two images in one message.`,
       blocks,
     });
-    posted.push("4 · two images in one message (one by id, one by url)");
-  } catch (error) {
-    failures.push(`4 · images in one message — ${(error as Error).message}`);
-  }
 
-  return { posted, failures };
+    return { ok: true, detail: "" };
+  } catch (error) {
+    return { ok: false, detail: ` — ${(error as Error).message}` };
+  }
 }
 
-/** Uploads to Slack without sharing it anywhere, returning both references. */
+/** Uploads to Slack without sharing it anywhere. */
 async function uploadPrivately(
   slack: SlackClient,
   doFetch: typeof fetch,
   photoUrl: string,
   filename: string,
-): Promise<{ fileId: string; urlPrivate?: string }> {
+): Promise<{ fileId: string }> {
   const response = await doFetch(photoUrl);
   if (!response.ok) {
     throw new Error(`could not fetch ${filename}: HTTP ${response.status}`);
   }
   const bytes = Buffer.from(await response.arrayBuffer());
-
-  const { fileId, urlPrivate } = await slack.uploadImage({
+  const { fileId } = await slack.uploadImage({
     filename,
     title: filename,
     bytes,
   });
-  return { fileId, ...(urlPrivate === undefined ? {} : { urlPrivate }) };
+  return { fileId };
 }
 
 export function summariseReport(report: VerifyReport): string {
@@ -215,9 +239,10 @@ export function summariseReport(report: VerifyReport): string {
     "Now go and look at the channel. What you're checking:",
     "• Probes 1 and 3: do the buttons appear, and does tapping one change the message?",
     "• Probe 2: mute the channel, re-run, and see whether the mention still badges.",
-    "• Probe 4: do *both* images show, and is each button under its own image? " +
-      "If only one image renders, note which — it decides how the batched " +
-      "review references its files.",
+    "• Probes 4a and 4b: each is a separate message trying a different way of " +
+      "referencing the files. Whichever one renders both images, with a button " +
+      "under each, is the form the batched review will use. Either working is " +
+      "enough.",
   );
   return lines.join("\n");
 }

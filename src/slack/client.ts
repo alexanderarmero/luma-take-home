@@ -35,12 +35,17 @@ export interface UploadImageInput {
 export interface SlackClient {
   postMessage(input: PostMessageInput): Promise<{ ts: string }>;
   updateMessage(input: UpdateMessageInput): Promise<void>;
-  uploadImage(
-    input: UploadImageInput,
-  ): Promise<{ fileId: string; ts?: string; urlPrivate?: string }>;
+  uploadImage(input: UploadImageInput): Promise<{ fileId: string; ts?: string }>;
   openView(input: { triggerId: string; view: Record<string, unknown> }): Promise<void>;
   /** Fetches a file Slack is hosting privately. Returns its text. */
   downloadFile(urlPrivate: string): Promise<string>;
+  /**
+   * The private URL of an uploaded file.
+   *
+   * `files.completeUploadExternal` returns only `{id, title}`, so anything
+   * needing the URL has to ask for it separately.
+   */
+  getFileUrl(fileId: string): Promise<string | undefined>;
 }
 
 export interface SlackClientOptions {
@@ -154,16 +159,16 @@ export function createSlackClient(options: SlackClientOptions): SlackClient {
       // the shape varies by channel visibility, so it is read defensively —
       // a missing ts is recoverable, a crash here is not.
       const ts = channel ? extractShareTs(completed, channel) : undefined;
-      const urlPrivate = (
-        (completed.files as Array<Record<string, unknown>> | undefined)?.[0]
-          ?.url_private as string | undefined
-      );
+      return ts === undefined ? { fileId } : { fileId, ts };
+    },
 
-      return {
-        fileId,
-        ...(ts === undefined ? {} : { ts }),
-        ...(urlPrivate === undefined ? {} : { urlPrivate }),
-      };
+    async getFileUrl(fileId) {
+      const body = await callForm(
+        "files.info",
+        new URLSearchParams({ file: fileId }),
+      );
+      const file = body.file as Record<string, unknown> | undefined;
+      return (file?.url_private as string | undefined) ?? undefined;
     },
 
     async openView({ triggerId, view }) {
