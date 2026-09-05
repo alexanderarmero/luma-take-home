@@ -1200,3 +1200,81 @@ product's message, so the discussion survives intact.
 rejected because they lowered scroll cost but raised viewing cost — a tap per
 image. This lowers both: every candidate is visible without a tap, and the
 channel is a third of the length.
+
+---
+
+## D39 — The channel is an index; the images live in each product's thread
+
+**Settled:** 2026-09-05. **Revises D38. Restores D32.**
+
+| Sub-decision | Ruling |
+|---|---|
+| **D39.1** | **One text-only message per product in the channel:** SKU, product name, shot idea, and a live count of how many photos are decided. No images. |
+| **D39.2** | **The candidates go in that message's thread**, one file share each, with Approve and Discard on the image they belong to. |
+| **D39.3** | **Bytes are uploaded to Slack again**, restoring D32. `files.completeUploadExternal` accepts `thread_ts` (F8.4) and blocks ride on file shares (F8.2). |
+| **D39.4** | **Discussion happens in the same thread**, beside the images. |
+
+**Why this beats every shape considered before it.** The Q1b objection to threads
+was exact and correct: *"threads reduce scroll cost but raise viewing cost"* —
+one deliberate tap per image, 120 times. **The objection was about granularity,
+and the granularity changed.** One tap per *product* is 40, and inside the
+thread all of that product's candidates are visible at once.
+
+| Shape | Channel | Taps to see all | Discussion |
+|---|---|---|---|
+| Flat per-image *(original)* | 120 image messages | 0 | Per image |
+| Batch-parent *(rejected, F4.10)* | 1 message | 1, then scroll 120 | **Nowhere** |
+| Per-product with images *(D38)* | 40 image messages | 0 | Per product |
+| **This** | **40 text lines** | **40** | **Per product** |
+
+**And the discussion problem dissolves rather than being traded.** F4.10 killed
+the batch-parent design because a single thread level meant images and
+conversation could not both live there. At *product* grain they can, and should:
+*"that one, not the others"* is a comparison across a product's candidates, so
+the product is the correct home for both the images and the argument about them.
+
+**What it costs.** A tap to see anything. The channel tells you a product exists
+and how far along it is, but not what the photographs look like — so a reviewer
+cannot triage by glancing. That is the deliberate trade: the channel becomes
+searchable rather than browsable.
+
+**A reversal recovered.** D38 had to reference images from our own endpoint,
+because an `image` block cannot reference an unshared Slack file (F12). Posting
+each candidate as a file share sidesteps that entirely, so the bytes are back in
+Slack and the channel no longer depends on our storage.
+
+---
+
+## D40 — A read-only overview page, linked from Slack
+
+**Settled:** 2026-09-05.
+
+| Sub-decision | Ruling |
+|---|---|
+| **D40.1** | An HTML page showing the whole batch: every product, its candidates, their state, spend, and what came up short. |
+| **D40.2** | **Read-only.** No approving, no discarding, no editing. |
+| **D40.3** | Reached by an **unguessable 128-bit token** stored on the batch. No login, no expiry; anyone with the link can look. |
+| **D40.4** | **Polls every four seconds while anything is still generating**, and reloads only when the state actually changed. |
+| **D40.5** | Linked from the batch-start message and from `/luma status`. |
+
+**Why read-only is the load-bearing part.** Approvals stay in Slack because
+Slack tells us who clicked (F4.2). A page reached by a shared link cannot say
+who decided — `decision_events.actor` would degrade from a person to *whoever
+had the link*, and F3.3's *"Ellie's pick is the decision"* would drop from
+enforced to conventional. **That is the same gap that let F3.4 go unnoticed for
+three weeks: nobody could say who chose what.** Keeping the page read-only means
+the token can be shared freely and still authorises nothing.
+
+**Why polling rather than SSE.** Railway caps SSE at 15 minutes with a 5-minute
+idle close, and the research found **no primary source** on whether an SSE
+stream survives a locked iPhone (F13, `Research-html-review-surface.md`). Ellie
+is phone-first. A failed poll retries; a dropped stream leaves a progress page
+**looking finished when it is not** — the worst available failure for a progress
+indicator.
+
+**Why this does not repeat the tool they abandoned.** F3.5: nobody logged into
+the dashboard after week one. **Nobody has to log into this one to do their
+job** — the work happens in Slack, and the page is something you glance at out
+of curiosity. A page visited by choice has a different survival rate from one
+visited by obligation. It is also, finally, a direct answer to Maya's stated ask
+(F3.7d) rather than an indirect one.

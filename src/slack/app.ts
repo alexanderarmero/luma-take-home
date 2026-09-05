@@ -9,12 +9,18 @@ import {
   UPLOAD_CALLBACK_ID,
 } from "../catalog/ingest.js";
 import type { SqlClient } from "../db/client.js";
-import { getImageByObjectKey, setBatchState } from "../db/repository.js";
+import {
+  ensureReviewToken,
+  getImageByObjectKey,
+  setBatchState,
+} from "../db/repository.js";
 import type { ImageGenerator } from "../generation/generator.js";
 import { describeWait } from "../generation/estimate.js";
 import { startGeneration } from "../generation/start.js";
 import type { ImageModel } from "../pricing.js";
 import { buildStatusSummary } from "../status/status.js";
+import { renderReviewPage } from "../review/page.js";
+import { buildReviewState } from "../review/state.js";
 import type { ObjectStore } from "../storage/store.js";
 import type { SlackClient } from "./client.js";
 import { verifySlackSignature } from "./signature.js";
@@ -45,6 +51,8 @@ export interface AppDeps {
   aspectRatio?: string;
   /** Injected so the pipeline can be driven end to end without a network. */
   fetch?: typeof fetch;
+  /** Absolute base for links handed to Slack. */
+  publicBaseUrl?: string;
 }
 
 const USAGE = [
@@ -101,7 +109,9 @@ export function createApp(deps: AppDeps) {
 
       case "status":
         try {
-          return c.json(ephemeral(await buildStatusSummary(deps.db)));
+          return c.json(
+            ephemeral(await buildStatusSummary(deps.db, deps.publicBaseUrl)),
+          );
         } catch (error) {
           // Slack renders an unhandled error as a bare "dispatch_failed",
           // which tells a non-engineer nothing.
@@ -179,6 +189,21 @@ export function createApp(deps: AppDeps) {
     } catch {
       return c.text("not found", 404);
     }
+  });
+
+  /** The read-only overview. Unguessable token, no login, no actions. */
+  app.get("/review/:token", async (c) => {
+    const token = c.req.param("token");
+    const state = await buildReviewState(deps.db, token);
+    if (!state) return c.text("Not found", 404);
+    return c.html(renderReviewPage(state, token));
+  });
+
+  /** What the page polls. Same state, as JSON. */
+  app.get("/api/review/:token", async (c) => {
+    const state = await buildReviewState(deps.db, c.req.param("token"));
+    if (!state) return c.json({ error: "not_found" }, 404);
+    return c.json(state, 200, { "cache-control": "no-store" });
   });
 
   app.post("/slack/interactions", async (c) => {
@@ -267,6 +292,10 @@ export function createApp(deps: AppDeps) {
         await setBatchState(deps.db, batchId, "generating");
 
         const total = counts.styled + counts.passThrough;
+        const reviewToken = await ensureReviewToken(deps.db, batchId);
+        const overviewUrl = deps.publicBaseUrl
+          ? `${deps.publicBaseUrl}/review/${reviewToken}`
+          : null;
         await slack.postMessage({
           channel,
           text: [
@@ -282,6 +311,14 @@ export function createApp(deps: AppDeps) {
             `This usually takes ${describeWait(total)} for a batch this size. ` +
               "You don't need to wait here — I'll mention you once the whole " +
               "batch is ready to review.",
+            ...(overviewUrl
+              ? [
+                  "",
+                  `*Overview page:* ${overviewUrl}`,
+                  "_Watch progress there as it fills in. Approving and " +
+                    "discarding happens here in Slack, in each product's thread._",
+                ]
+              : []),
           ].join("\n"),
         });
         void reviewChannelId;

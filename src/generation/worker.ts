@@ -2,16 +2,21 @@ import type { SqlClient } from "../db/client.js";
 import {
   claimNextJob,
   getProductImages,
+  markImagePosted,
   markImageStored,
-  markProductPosted,
   setJobState,
+  setProductMessageTs,
   type PipelineJob,
 } from "../db/repository.js";
 import type { ImageModel } from "../pricing.js";
 import type { SlackClient } from "../slack/client.js";
 import type { ObjectStore } from "../storage/store.js";
 import { GenerationError, type ImageGenerator } from "./generator.js";
-import { buildProductMessage } from "./message.js";
+import {
+  buildCandidateBlocks,
+  buildFailureNote,
+  buildProductChannelMessage,
+} from "./message.js";
 
 export { APPROVE_ACTION_ID, DISCARD_ACTION_ID } from "./message.js";
 
@@ -26,8 +31,6 @@ export interface WorkerDeps {
   channel: string;
   model: ImageModel;
   aspectRatio: string;
-  /** Where Slack fetches images from — the deployed service's own URL. */
-  publicBaseUrl: string;
   fetch?: typeof fetch;
   log?: (message: string) => void;
   /** Injected so the poll loop can be driven without real time in tests. */
@@ -148,28 +151,52 @@ export async function runOnce(
 
       case "stored": {
         // The sibling gate means every candidate for this product has settled
-        // by the time one of them is claimable, so the whole set is posted as
-        // a single message with a decision under each image.
+        // by now, so the whole set goes out together: one line in the channel,
+        // and the photographs in its thread.
         const product = await getProductImages(deps.db, job.batchId, job.sku);
-        const { text, blocks } = buildProductMessage({
+
+        const channelMessage = buildProductChannelMessage({
           sku: job.sku,
           productName: product.productName,
           shotIdea: product.shotIdea,
           images: product.images,
-          publicBaseUrl: deps.publicBaseUrl,
         });
 
-        const { ts } = await deps.slack.postMessage({
+        const { ts: threadTs } = await deps.slack.postMessage({
           channel: deps.channel,
-          text,
-          blocks,
+          text: channelMessage.text,
+          blocks: channelMessage.blocks,
         });
+        await setProductMessageTs(deps.db, job.batchId, job.sku, threadTs);
 
-        await markProductPosted(
-          deps.db,
-          product.images.filter((i) => i.jobState === "stored").map((i) => i.imageId),
-          ts,
-        );
+        // Each candidate is its own file share inside that thread: the bytes
+        // live in Slack, so the record survives our storage, and a decision
+        // sits directly under the image it belongs to.
+        for (const image of product.images) {
+          if (image.jobState !== "stored" || !image.objectKey) continue;
+
+          const { bytes } = await deps.store.get(image.objectKey);
+          const { ts } = await deps.slack.uploadImage({
+            channel: deps.channel,
+            threadTs,
+            filename: image.filename,
+            title: image.filename,
+            bytes,
+            blocks: buildCandidateBlocks(image),
+          });
+          await markImagePosted(deps.db, image.imageId, ts ?? "");
+        }
+
+        const failed = product.images.filter((i) => i.jobState === "failed");
+        if (failed.length > 0) {
+          await deps.slack.postMessage({
+            channel: deps.channel,
+            threadTs,
+            text: `${failed.length} of ${product.images.length} couldn't be generated`,
+            blocks: buildFailureNote(failed, product.images.length),
+          });
+        }
+
         return { kind: "worked" };
       }
 

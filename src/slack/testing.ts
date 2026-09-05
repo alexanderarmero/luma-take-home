@@ -69,18 +69,20 @@ export function createFakeSlack(): FakeSlack {
 }
 
 /**
- * Filenames of the image blocks in a posted message, in order.
+ * Filenames of the candidate images, in posting order.
  *
- * Images now ride inside a product's message rather than being uploaded one
- * per post, so tests read them from the blocks.
+ * Candidates are file shares posted into a product's thread, so they show up
+ * as uploads rather than as blocks in a channel message.
  */
-export function imageFilenames(post: { blocks?: unknown[] }): string[] {
-  return ((post.blocks ?? []) as Array<Record<string, unknown>>)
-    .filter((b) => b.type === "image")
-    .map((b) => String((b.title as { text?: string } | undefined)?.text ?? ""));
+export function allImageFilenames(slack: { uploads: Array<{ filename: string }> }): string[] {
+  return slack.uploads.map((u) => u.filename);
 }
 
-/** Every image filename across every posted message, in posting order. */
-export function allImageFilenames(posts: Array<{ blocks?: unknown[] }>): string[] {
-  return posts.flatMap(imageFilenames);
+/** The product lines posted to the channel, ignoring threaded replies. */
+export function channelProductMessages(slack: {
+  posts: PostMessageInput[];
+}): PostMessageInput[] {
+  return slack.posts.filter(
+    (p) => p.threadTs === undefined && /^HG-\d+ · /.test(p.text),
+  );
 }

@@ -1,6 +1,7 @@
 import type { SqlClient } from "../db/client.js";
 import {
   batchCounts,
+  ensureReviewToken,
   getDeliveredBatchId,
   getLatestBatch,
 } from "../db/repository.js";
@@ -13,7 +14,10 @@ import {
  * per-image state with deep links; this version exists early because it is
  * also the observability the rest of the build needs.
  */
-export async function buildStatusSummary(db: SqlClient): Promise<string> {
+export async function buildStatusSummary(
+  db: SqlClient,
+  publicBaseUrl?: string,
+): Promise<string> {
   const batch = await getLatestBatch(db);
   if (!batch) return "No batches yet. Upload a catalog to get started.";
 
@@ -31,6 +35,13 @@ export async function buildStatusSummary(db: SqlClient): Promise<string> {
       ? "Nothing delivered yet."
       : `Last delivered: batch #${deliveredId}.`,
   );
+
+  if (publicBaseUrl) {
+    // The same link the batch was announced with, so it is reachable without
+    // scrolling back to find the original message.
+    const token = await ensureReviewToken(db, batch.id);
+    lines.push("", `Overview: ${publicBaseUrl}/review/${token}`);
+  }
 
   return lines.join("\n");
 }
