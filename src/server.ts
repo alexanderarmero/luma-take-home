@@ -34,6 +34,7 @@ const app = createApp({
   approverUserId: config.slack.approverUserId,
   generator,
   store,
+  publicBaseUrl: config.publicBaseUrl,
 });
 
 // The HTTP server comes up first, deliberately.
@@ -64,7 +65,6 @@ const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
         store,
         slack,
         channel: config.slack.reviewChannelId,
-        publicBaseUrl: config.publicBaseUrl,
         model: "uni-1-max",
         aspectRatio: "1:1",
         log: (message) => console.log(message),

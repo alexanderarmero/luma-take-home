@@ -1253,3 +1253,70 @@ in the sheet helps everyone who never touches our system at all.**
 **What to watch:** whether anyone actually pastes it back. If the CSV lands in Slack and is
 never used, the sheet stays broken and the fix was theatre — and the honest response is to
 reconsider live sheet sync, which the brief explicitly said nobody was asking for (F3.9).
+
+---
+
+## T12 — Cost of D39/D40
+
+### T12.1 — The channel stops being browsable
+
+**Traded away:** glanceability. Under D38 you could scroll the channel and see
+the photographs. Now you see forty lines of text and have to open a thread to
+see anything.
+
+**Why it is right:** the channel's job changed from *showing* to *finding*.
+Forty searchable lines beat forty screens of photographs on a phone, and the
+reviewer is opening each product anyway in order to decide. The tap is not
+overhead on the way to the work; it *is* the work.
+
+**Watch for:** anyone asking "which ones look good" without opening threads.
+That would mean triage-by-glance was load-bearing and we removed it.
+
+---
+
+### T12.2 — Two surfaces to keep coherent
+
+**Traded away:** single-surface simplicity. The overview page and the Slack
+channel now describe the same batch, and both must agree.
+
+**What keeps them honest:** both read the same committed rows. The page holds no
+cached state and counts nothing in memory, which is the same rule `/luma status`
+follows. A disagreement between them would therefore be a bug in one query, not
+drift between two systems.
+
+**The predictable request:** someone will ask why they cannot approve from the
+page. The answer is D40.2's reason, not laziness, and it should be given as
+such.
+
+---
+
+### T12.3 — A shared link with no expiry
+
+**Traded away:** any control over who sees a batch. The token authorises nobody
+but reveals everything about the batch to anyone holding it.
+
+**Why it is proportionate:** the page exposes product photographs bound for a
+public website, and grants no action. OWASP's own framing is that unguessable
+tokens are *defence in depth, not the defence* — which is exactly why the page
+does not act. **If it could approve, this would be the wrong model.**
+
+**The residual risk:** an unreleased drop is commercially sensitive before
+launch, which is precisely when this link circulates. Low, not zero, and the
+same risk already accepted for the generated-images CSV (A6.4).
+
+---
+
+### T12.4 — Polling costs requests to buy a failure mode
+
+**Traded away:** elegance and a little bandwidth. A four-second poll on an open
+page is ~15 requests a minute, against a stream that would cost one connection.
+
+**What it buys:** a failure that announces itself. The research could find no
+primary source on backgrounded SSE in mobile Safari, and the person most likely
+to background it is the one the product is for. **A page that silently stops
+updating looks finished** — and telling a reviewer a batch is complete when it
+is not is worse than any amount of redundant polling.
+
+**Reversible:** if the page is ever left open for long stretches and the request
+volume matters, SSE with Railway's documented heartbeat-and-reconnect is the
+upgrade. The reason to wait is evidence about the phone, not about the cost.

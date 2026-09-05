@@ -14,105 +14,133 @@ const FAILURE_REASONS: Record<string, string> = {
   invalid_request: "the request was rejected as invalid",
 };
 
-export interface ProductMessageInput {
+export function explainFailure(failureCode: string | null): string {
+  if (!failureCode) return "the generation failed";
+  return FAILURE_REASONS[failureCode] ?? `the generation failed (${failureCode})`;
+}
+
+export interface ProductChannelInput {
   sku: string;
   productName: string;
   shotIdea: string | null;
   images: ProductImage[];
-  /** Where Slack fetches the images from — the deployed service's own URL. */
-  publicBaseUrl: string;
-}
-
-function imageUrl(baseUrl: string, objectKey: string): string {
-  // Object keys look like `images/<uuid>.jpg`; the route takes the uuid.
-  const id = objectKey.replace(/^images\//, "").replace(/\.jpg$/, "");
-  return `${baseUrl}/img/${id}`;
 }
 
 /**
- * One message per product, carrying every candidate with its own decision.
+ * The product's line in the channel. Deliberately text only.
  *
- * Grouping them is what makes the choice a comparison rather than a sequence:
- * the alternatives are in front of the reviewer at once, and a button sits
- * under the image it belongs to rather than being matched to it by a label.
+ * The channel is for finding things: forty scannable lines you can search by
+ * SKU and skim on a phone, rather than forty screens of photographs. The
+ * images live in this message's thread, which is also where the conversation
+ * about them belongs — "that one, not the others" is a comparison across a
+ * product's candidates, so the product is the right grain for both.
  */
-export function buildProductMessage(input: ProductMessageInput): {
+export function buildProductChannelMessage(input: ProductChannelInput): {
   text: string;
   blocks: Block[];
 } {
-  const { sku, productName, shotIdea, images, publicBaseUrl } = input;
+  const { sku, productName, shotIdea, images } = input;
 
-  const posted = images.filter((i) => i.objectKey !== null && i.jobState !== "failed");
+  const usable = images.filter((i) => i.jobState !== "failed");
   const failed = images.filter((i) => i.jobState === "failed");
   const isPassThrough = images.some((i) => i.kind === "pass_through");
+  const decided = images.filter((i) => i.decision != null).length;
 
-  const heading = isPassThrough
-    ? `*${sku} · ${productName}*\n_No shot idea was given, so this is the original ` +
-      `photo, unchanged._`
-    : `*${sku} · ${productName}*\n_"${shotIdea ?? ""}"_`;
+  const subtitle = isPassThrough
+    ? "_No shot idea was given, so this is the original photo, unchanged._"
+    : `_"${shotIdea ?? ""}"_`;
 
-  const blocks: Block[] = [
-    { type: "section", text: { type: "mrkdwn", text: heading } },
+  const counts: string[] = [
+    `${usable.length} ${usable.length === 1 ? "photo" : "photos"}`,
   ];
+  counts.push(
+    decided === 0
+      ? "none decided yet"
+      : decided === usable.length
+        ? "all decided"
+        : `${decided} of ${usable.length} decided`,
+  );
+  if (failed.length > 0) {
+    counts.push(`${failed.length} couldn't be generated`);
+  }
 
-  for (const image of posted) {
-    blocks.push({
-      type: "image",
-      image_url: imageUrl(publicBaseUrl, image.objectKey!),
-      alt_text: `${productName} — ${image.filename}`,
-      title: { type: "plain_text", text: image.filename },
-    });
+  const text = `${sku} · ${productName}`;
 
-    if (image.prompt) {
-      // A context block keeps the prompt readable without letting it compete
-      // with the image it explains.
-      blocks.push({
+  return {
+    text,
+    blocks: [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*${sku} · ${productName}*\n${subtitle}`,
+        },
+      },
+      {
         type: "context",
-        elements: [{ type: "mrkdwn", text: image.prompt }],
-      });
-    }
+        elements: [
+          {
+            type: "mrkdwn",
+            text: `${counts.join(" · ")} — open the thread to review.`,
+          },
+        ],
+      },
+    ],
+  };
+}
 
+/**
+ * One candidate, posted into the product's thread as its own file share so the
+ * bytes live in Slack and the decision sits directly under the image it is
+ * about.
+ */
+export function buildCandidateBlocks(image: ProductImage): Block[] {
+  const blocks: Block[] = [];
+
+  if (image.prompt) {
+    // Small grey text: visible, and not competing with the photograph.
     blocks.push({
-      type: "actions",
-      elements: [
-        {
-          type: "button",
-          action_id: APPROVE_ACTION_ID,
-          text: { type: "plain_text", text: "Approve", emoji: true },
-          style: "primary",
-          value: image.imageId,
-        },
-        {
-          type: "button",
-          action_id: DISCARD_ACTION_ID,
-          text: { type: "plain_text", text: "Discard", emoji: true },
-          value: image.imageId,
-        },
-      ],
+      type: "context",
+      elements: [{ type: "mrkdwn", text: image.prompt }],
     });
   }
 
-  // Said outright. A candidate that silently never appears is indistinguishable
-  // from one still on its way, and the reviewer would keep waiting for it.
-  if (failed.length > 0) {
-    const reasons = [...new Set(failed.map((f) => explain(f.failureCode)))];
-    blocks.push({
+  blocks.push({
+    type: "actions",
+    elements: [
+      {
+        type: "button",
+        action_id: APPROVE_ACTION_ID,
+        text: { type: "plain_text", text: "Approve", emoji: true },
+        style: "primary",
+        value: image.imageId,
+      },
+      {
+        type: "button",
+        action_id: DISCARD_ACTION_ID,
+        text: { type: "plain_text", text: "Discard", emoji: true },
+        value: image.imageId,
+      },
+    ],
+  });
+
+  return blocks;
+}
+
+/** Note posted into the thread for candidates that never arrived. */
+export function buildFailureNote(failed: ProductImage[], total: number): Block[] {
+  const reasons = [...new Set(failed.map((f) => explainFailure(f.failureCode)))];
+  return [
+    {
       type: "context",
       elements: [
         {
           type: "mrkdwn",
           text:
-            `:warning: ${failed.length} of ${images.length} couldn't be generated — ` +
+            `:warning: ${failed.length} of ${total} couldn't be generated — ` +
             `${reasons.join("; ")}.`,
         },
       ],
-    });
-  }
-
-  return { text: `${sku} · ${productName}`, blocks };
-}
-
-function explain(failureCode: string | null): string {
-  if (!failureCode) return "the generation failed";
-  return FAILURE_REASONS[failureCode] ?? `the generation failed (${failureCode})`;
+    },
+  ];
 }

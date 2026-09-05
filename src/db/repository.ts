@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import type { SqlClient } from "./client.js";
 
 export type Decision = "approve" | "discard";
@@ -550,6 +550,8 @@ export async function batchOutcome(
 
 export interface ProductImage {
   imageId: string;
+  /** Present only where the overview page needs it. */
+  decision?: "approved" | "discarded" | null;
   slot: number;
   filename: string;
   prompt: string | null;
@@ -628,4 +630,142 @@ export async function markProductPosted(
       [imageIds],
     );
   });
+}
+
+/**
+ * Assigns the batch its review token if it has none, and returns it.
+ *
+ * 128 bits from a CSPRNG — comfortably past OWASP's 64-bit floor for a
+ * session-equivalent identifier, and the same shape as the object keys the
+ * image route already relies on.
+ */
+export async function ensureReviewToken(
+  db: SqlClient,
+  batchId: number,
+): Promise<string> {
+  const { rows } = await db.query<{ review_token: string | null }>(
+    `select review_token from batches where id = $1`,
+    [batchId],
+  );
+  const existing = rows[0]?.review_token;
+  if (existing) return existing;
+
+  const token = randomBytes(16).toString("hex");
+  await db.query(`update batches set review_token = $2 where id = $1`, [
+    batchId,
+    token,
+  ]);
+  return token;
+}
+
+export async function findBatchByReviewToken(
+  db: SqlClient,
+  token: string,
+): Promise<Batch | null> {
+  const { rows } = await db.query<{
+    id: string;
+    source_filename: string;
+    state: string;
+  }>(
+    `select id, source_filename, state from batches where review_token = $1`,
+    [token],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    sourceFilename: row.source_filename,
+    state: row.state,
+  };
+}
+
+export async function setProductMessageTs(
+  db: SqlClient,
+  batchId: number,
+  sku: string,
+  messageTs: string,
+): Promise<void> {
+  await db.query(
+    `update batch_rows set message_ts = $3 where batch_id = $1 and sku = $2`,
+    [batchId, sku, messageTs],
+  );
+}
+
+export interface ProductSummary {
+  sku: string;
+  productName: string;
+  shotIdea: string | null;
+  messageTs: string | null;
+  images: ProductImage[];
+}
+
+/** Every product in a batch with its candidates, for the overview page. */
+export async function getBatchProducts(
+  db: SqlClient,
+  batchId: number,
+): Promise<ProductSummary[]> {
+  const { rows } = await db.query<{
+    sku: string;
+    product_name: string;
+    shot_idea: string | null;
+    message_ts: string | null;
+    image_id: string | null;
+    slot: number | null;
+    filename: string | null;
+    prompt: string | null;
+    kind: ImageKind | null;
+    object_key: string | null;
+    state: JobState | null;
+    failure_code: string | null;
+    decision: string | null;
+  }>(
+    `select r.sku, r.product_name, r.shot_idea, r.message_ts,
+            i.id as image_id, i.slot, i.filename, i.prompt, i.kind,
+            i.object_key, j.state, j.failure_code,
+            case
+              when a.image_id is not null then 'approved'
+              when d.image_id is not null then 'discarded'
+              else null
+            end as decision
+       from batch_rows r
+       left join images i           on i.batch_id = r.batch_id and i.sku = r.sku
+       left join image_jobs j       on j.image_id = i.id
+       left join approved_images a  on a.image_id = i.id
+       left join discarded_images d on d.image_id = i.id
+      where r.batch_id = $1
+      order by r.row_index asc, i.slot asc`,
+    [batchId],
+  );
+
+  const products = new Map<string, ProductSummary>();
+
+  for (const row of rows) {
+    let product = products.get(row.sku);
+    if (!product) {
+      product = {
+        sku: row.sku,
+        productName: row.product_name,
+        shotIdea: row.shot_idea,
+        messageTs: row.message_ts,
+        images: [],
+      };
+      products.set(row.sku, product);
+    }
+
+    if (row.image_id) {
+      product.images.push({
+        imageId: row.image_id,
+        slot: row.slot ?? 0,
+        filename: row.filename ?? "",
+        prompt: row.prompt,
+        kind: row.kind ?? "styled",
+        objectKey: row.object_key,
+        jobState: row.state ?? "pending_submit",
+        failureCode: row.failure_code,
+        decision: (row.decision as "approved" | "discarded" | null) ?? null,
+      });
+    }
+  }
+
+  return [...products.values()];
 }

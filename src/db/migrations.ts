@@ -132,4 +132,18 @@ export const MIGRATIONS: ReadonlyArray<{ name: string; sql: string }> = [
       alter table images add column message_ts text;
     `,
   },
+  {
+    name: "0004_review_surface",
+    sql: `
+      -- An unguessable per-batch token. The overview page is read-only, so a
+      -- capability link is proportionate: it exposes product photos bound for
+      -- a public website, not anything that can act.
+      alter table batches add column review_token text unique;
+
+      -- The product's message in the channel. Its thread holds the candidate
+      -- images, so discussion lands beside the comparison it is about, and the
+      -- channel itself stays scannable text.
+      alter table batch_rows add column message_ts text;
+    `,
+  },
 ];

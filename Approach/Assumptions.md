@@ -684,3 +684,10 @@ OQ-19, OQ-1, OQ-3, OQ-6, OQ-11, OQ-18, OQ-5, OQ-12.
 - **OQ-25 — prompt versioning**, required if D34.6's editable system prompt is built (T12.2).
 - **OQ-26 — are pass-through images reviewed or auto-approved?** Recommendation: reviewed.
   First thing to relax under review-load pressure (T12.1, F9.5).
+
+**OQ-27 — Should a frozen copy of the overview be written to the bucket at
+`delivered`?** The page is rendered on demand, because a file frozen in a bucket
+cannot show a batch that is still running. A snapshot taken *after* delivery is a
+different thing and might be worth having as a permanent artefact alongside the
+zip — the batch is immutable by then (D22), so there is nothing left to keep
+current. Raised 2026-09-05; not blocking.
