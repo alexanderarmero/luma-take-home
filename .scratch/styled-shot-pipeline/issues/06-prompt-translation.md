@@ -14,13 +14,13 @@ Shot Idea produces.
 
 **Blocked by:** 05
 
-**Status:** ready-for-agent
+**Status:** done (2026-09-05)
 
-- [ ] A Shot Idea produces two to three prompts that differ meaningfully from one another while remaining faithful to it
-- [ ] The stable system prefix carries the brand's own aesthetic, derived from the catalog's palette and materials rather than invented
-- [ ] The team's existing Shot Ideas are included as tone calibration, so output matches their register rather than generic product-photography language
-- [ ] The stable prefix is identical across every product in a batch and is cached, with cache hits verified rather than assumed
-- [ ] The output shape is forced with structured outputs, not with assistant prefill
-- [ ] The Notes column is not read, passed, or interpreted anywhere in prompt construction
-- [ ] The prompt is displayed on each image message, rendered as a de-emphasised footnote rather than as content competing with the image
-- [ ] The prompt used is stored against the image
+- [x] A Shot Idea produces two to three prompts that differ meaningfully from one another while remaining faithful to it
+- [x] The stable system prefix carries the brand's own aesthetic, derived from the catalog's palette and materials rather than invented
+- [x] The team's existing Shot Ideas are included as tone calibration, so output matches their register rather than generic product-photography language
+- [x] The stable prefix is identical across every product in a batch and is cached, with cache hits verified rather than assumed
+- [x] The output shape is forced with structured outputs, not with assistant prefill
+- [x] The Notes column is not read, passed, or interpreted anywhere in prompt construction
+- [x] The prompt is displayed on each image message, rendered as a de-emphasised footnote rather than as content competing with the image
+- [x] The prompt used is stored against the image

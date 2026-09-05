@@ -16,6 +16,8 @@ import {
 } from "../db/repository.js";
 import type { ImageGenerator } from "../generation/generator.js";
 import { describeWait } from "../generation/estimate.js";
+import type { BrandContext } from "../generation/brand.js";
+import type { PromptWriter } from "../generation/prompts.js";
 import { startGeneration } from "../generation/start.js";
 import type { ImageModel } from "../pricing.js";
 import { buildStatusSummary } from "../status/status.js";
@@ -61,6 +63,8 @@ export interface AppDeps {
   fetch?: typeof fetch;
   /** Absolute base for links handed to Slack. */
   publicBaseUrl?: string;
+  /** Turns a shot idea into several distinct generation prompts. */
+  promptWriterFor?: (brand: BrandContext) => PromptWriter;
 }
 
 const USAGE = [
@@ -442,7 +446,10 @@ export function createApp(deps: AppDeps) {
       // by the background worker rather than here: a deferred task dies with
       // its process, and a batch has to survive a restart.
       deps.defer(async () => {
-        const counts = await startGeneration(deps.db, batchId);
+        const counts = await startGeneration(deps.db, batchId, {
+          ...(deps.promptWriterFor ? { promptWriterFor: deps.promptWriterFor } : {}),
+          log: (message) => console.log(message),
+        });
         await setBatchState(deps.db, batchId, "generating");
 
         const total = counts.styled + counts.passThrough;

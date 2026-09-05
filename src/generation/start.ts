@@ -1,7 +1,9 @@
 import type { SqlClient } from "../db/client.js";
 import { addImages, getBatchRows, type NewImage } from "../db/repository.js";
 import { CANDIDATES_PER_PRODUCT } from "../pricing.js";
+import { buildBrandContext, type BrandContext } from "./brand.js";
 import { buildFilename } from "./filename.js";
+import { fallbackPrompts, type PromptWriter } from "./prompts.js";
 
 /**
  * Turns an ingested catalog into the images that will be generated.
@@ -14,11 +16,23 @@ import { buildFilename } from "./filename.js";
 export async function startGeneration(
   db: SqlClient,
   batchId: number,
-): Promise<{ styled: number; passThrough: number }> {
+  options: {
+    /**
+     * Built from the batch's own rows, so the writer knows this brand's
+     * palette and the register the team writes in.
+     */
+    promptWriterFor?: (brand: BrandContext) => PromptWriter;
+    log?: (message: string) => void;
+  } = {},
+): Promise<{ styled: number; passThrough: number; translated: number }> {
   const rows = await getBatchRows(db, batchId);
+  const log = options.log ?? (() => {});
   const images: NewImage[] = [];
   let styled = 0;
   let passThrough = 0;
+  let translated = 0;
+
+  const promptWriter = options.promptWriterFor?.(buildBrandContext(rows));
 
   for (const row of rows) {
     if (row.shotIdea === null) {
@@ -34,6 +48,28 @@ export async function startGeneration(
       continue;
     }
 
+    // Several genuinely different readings of the same idea, so the reviewer
+    // is choosing between alternatives rather than near-identical samples.
+    let prompts = fallbackPrompts(row.shotIdea, CANDIDATES_PER_PRODUCT);
+    if (promptWriter) {
+      try {
+        prompts = await promptWriter.write({
+          shotIdea: row.shotIdea,
+          sku: row.sku,
+          productName: row.productName,
+          category: row.category,
+          colour: row.colour,
+          material: row.material,
+          count: CANDIDATES_PER_PRODUCT,
+        });
+        translated += 1;
+      } catch (error) {
+        // The shot idea unchanged is a worse prompt but a working batch. A
+        // hiccup in translation must not be able to stop the pipeline.
+        log(`[prompts] ${row.sku} fell back to the raw shot idea: ${(error as Error).message}`);
+      }
+    }
+
     for (let slot = 1; slot <= CANDIDATES_PER_PRODUCT; slot++) {
       images.push({
         sku: row.sku,
@@ -41,15 +77,12 @@ export async function startGeneration(
         slot,
         kind: "styled",
         filename: buildFilename({ sku: row.sku, slot, shotIdea: row.shotIdea }),
-        // Ticket 05 sends the shot idea through unchanged. Turning it into
-        // several genuinely different prompts is the next ticket; proving the
-        // pipeline comes first.
-        prompt: row.shotIdea,
+        prompt: prompts[slot - 1] ?? row.shotIdea,
       });
       styled += 1;
     }
   }
 
   await addImages(db, batchId, images);
-  return { styled, passThrough };
+  return { styled, passThrough, translated };
 }
