@@ -27,7 +27,16 @@ const STATE_LABEL: Record<string, string> = {
  * Self-contained — no external stylesheet, script or font — so it renders on a
  * phone with no network beyond the images themselves.
  */
-export function renderReviewPage(state: ReviewState, token: string): string {
+export interface Viewer {
+  /** Whether this request may approve, discard and confirm. */
+  canWrite: boolean;
+}
+
+export function renderReviewPage(
+  state: ReviewState,
+  token: string,
+  viewer: Viewer = { canWrite: false },
+): string {
   const { totals } = state;
   const done = totals.approved + totals.discarded;
   const percent = totals.images === 0 ? 0 : Math.round((done / totals.images) * 100);
@@ -74,6 +83,24 @@ export function renderReviewPage(state: ReviewState, token: string): string {
   .discarded { color:#a0522d; border-color:#a0522d; }
   .failed { color:#c53030; border-color:#c53030; }
   footer { color:var(--muted); font-size:13px; margin-top:28px; }
+  .thread { font-size:13px; color:var(--accent); text-decoration:none; }
+  .thread:hover { text-decoration:underline; }
+  .acts { display:flex; gap:6px; margin-top:6px; }
+  .acts button { flex:1; padding:6px 4px; font-size:12px; cursor:pointer;
+                 border:1px solid var(--line); border-radius:6px;
+                 background:var(--bg); color:var(--fg); }
+  .acts button:hover { border-color:var(--accent); }
+  .acts button.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .acts button[disabled] { opacity:.5; cursor:default; }
+  .confirm { border:1px solid var(--accent); border-radius:10px; padding:16px;
+             margin-top:24px; }
+  .confirm p { margin:0 0 12px; font-size:14px; }
+  button.primary { padding:10px 16px; font-size:15px; cursor:pointer;
+                   border:0; border-radius:8px; background:var(--accent); color:#fff; }
+  button.primary.armed { background:#b42318; }
+  #toast { position:fixed; left:50%; bottom:20px; transform:translateX(-50%);
+           background:var(--fg); color:var(--bg); padding:10px 16px;
+           border-radius:8px; font-size:14px; display:none; max-width:90vw; }
 </style>
 </head>
 <body>
@@ -97,17 +124,102 @@ export function renderReviewPage(state: ReviewState, token: string): string {
       : ""
   }
 
-  ${state.products.map(renderProduct).join("\n")}
+  ${state.products.map((p) => renderProduct(p, viewer)).join("\n")}
+
+  ${
+    viewer.canWrite && totals.pending === 0 && totals.images > 0 && state.batchState !== "delivered"
+      ? `<div class="confirm">
+           <p><b>Everything has been decided.</b> Confirming hands these to the
+           web person and freezes the batch — decisions can't be changed
+           afterwards.</p>
+           <button class="primary" id="confirm">Confirm and hand over</button>
+         </div>`
+      : ""
+  }
 
   <footer>
-    Read-only. Approve and discard in Slack, in each product's thread.
+    ${
+      viewer.canWrite
+        ? "You're signed in — your decisions save as you make them."
+        : "Read-only. Run <code>/luma signin</code> in Slack to get a link that lets you decide."
+    }
   </footer>
 </div>
+<div id="toast" role="status" aria-live="polite"></div>
 <script>
   // Polling rather than a stream: a failed poll retries, whereas a dropped
   // connection leaves a progress page looking finished when it is not.
   const TOKEN = ${JSON.stringify(token)};
   const REVISION = ${JSON.stringify(state.revision)};
+
+  function toast(message) {
+    const el = document.getElementById("toast");
+    el.textContent = message;
+    el.style.display = "block";
+    setTimeout(() => { el.style.display = "none"; }, 4000);
+  }
+
+  async function send(path, body) {
+    const res = await fetch(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      // Same-origin, and the cookie is SameSite=Lax, so a cross-site form
+      // cannot forge one of these.
+      credentials: "same-origin",
+      body: JSON.stringify(body),
+    });
+    if (res.ok) return true;
+    if (res.status === 403) {
+      toast("Your sign-in has expired or your access was removed. Run /luma signin again.");
+    } else {
+      const detail = await res.json().catch(() => null);
+      toast(detail?.reason ?? "That didn't save — try again.");
+    }
+    return false;
+  }
+
+  document.querySelectorAll(".acts").forEach((group) => {
+    const imageId = group.dataset.image;
+    group.querySelectorAll("button").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const decision = button.classList.contains("approve") ? "approve" : "discard";
+        group.querySelectorAll("button").forEach((b) => (b.disabled = true));
+        const ok = await send("/api/review/" + TOKEN + "/decide", { imageId, decision });
+        if (ok) location.reload();
+        else group.querySelectorAll("button").forEach((b) => (b.disabled = false));
+      });
+    });
+  });
+
+  const confirmButton = document.getElementById("confirm");
+  if (confirmButton) {
+    // Two taps, because this one cannot be undone and it sits on the same
+    // page as every approve and discard button. The first tap only arms it.
+    let armed = false;
+    confirmButton.addEventListener("click", async () => {
+      if (!armed) {
+        armed = true;
+        confirmButton.textContent = "Tap again to freeze this batch";
+        confirmButton.classList.add("armed");
+        setTimeout(() => {
+          if (!armed) return;
+          armed = false;
+          confirmButton.textContent = "Confirm and hand over";
+          confirmButton.classList.remove("armed");
+        }, 5000);
+        return;
+      }
+      confirmButton.disabled = true;
+      const ok = await send("/api/review/" + TOKEN + "/confirm", {});
+      if (ok) location.reload();
+      else {
+        armed = false;
+        confirmButton.disabled = false;
+        confirmButton.textContent = "Confirm and hand over";
+        confirmButton.classList.remove("armed");
+      }
+    });
+  }
   async function refresh() {
     try {
       const res = await fetch("/api/review/" + TOKEN, { cache: "no-store" });
@@ -118,27 +230,42 @@ export function renderReviewPage(state: ReviewState, token: string): string {
       if (next.revision !== REVISION) location.reload();
     } catch (_) { /* a transient failure is just the next poll's problem */ }
   }
-  if (${state.inProgress}) setInterval(refresh, 4000);
+  // Keep polling after generation finishes: write access is a list, so two
+  // people can be deciding at the same time and neither should act on a
+  // stale view. Slower once there is nothing being generated.
+  setInterval(refresh, ${state.inProgress ? 4000 : 15000});
 </script>
 </body>
 </html>`;
 }
 
-function renderProduct(product: ReviewState["products"][number]): string {
+function renderProduct(
+  product: ReviewState["products"][number],
+  viewer: Viewer,
+): string {
   const idea = product.isPassThrough
     ? "No shot idea was given — the original photo, unchanged."
     : `"${product.shotIdea ?? ""}"`;
 
-  return `<section class="product">
+  // Anchored by SKU so a Slack message can link straight to this product.
+  return `<section class="product" id="p-${esc(product.sku)}">
     <h2>${esc(product.sku)} · ${esc(product.productName)}</h2>
     <p class="idea">${esc(idea)}</p>
+    ${
+      product.threadUrl
+        ? `<p><a class="thread" href="${esc(product.threadUrl)}" target="_blank" rel="noopener">Open Slack thread</a></p>`
+        : ""
+    }
     <div class="shots">
-      ${product.candidates.map(renderCandidate).join("\n")}
+      ${product.candidates.map((c) => renderCandidate(c, viewer)).join("\n")}
     </div>
   </section>`;
 }
 
-function renderCandidate(candidate: ReviewState["products"][number]["candidates"][number]): string {
+function renderCandidate(
+  candidate: ReviewState["products"][number]["candidates"][number],
+  viewer: Viewer,
+): string {
   const label = STATE_LABEL[candidate.state] ?? candidate.state;
   const tagClass = ["approved", "discarded", "failed"].includes(candidate.state)
     ? candidate.state
@@ -148,10 +275,20 @@ function renderCandidate(candidate: ReviewState["products"][number]["candidates"
     ? `<img src="${esc(candidate.imageUrl)}" alt="${esc(candidate.filename)}" loading="lazy">`
     : `<div class="ph">${candidate.state === "failed" ? "not generated" : "generating…"}</div>`;
 
+  const decidable = viewer.canWrite && candidate.state !== "failed" && candidate.imageUrl;
+
   return `<figure>
     ${visual}
     <figcaption>${esc(candidate.filename)}<br>
       <span class="tag ${tagClass}">${esc(label)}</span>
     </figcaption>
+    ${
+      decidable
+        ? `<div class="acts" data-image="${esc(candidate.imageId)}">
+             <button class="approve${candidate.state === "approved" ? " on" : ""}">Approve</button>
+             <button class="discard${candidate.state === "discarded" ? " on" : ""}">Discard</button>
+           </div>`
+        : ""
+    }
   </figure>`;
 }

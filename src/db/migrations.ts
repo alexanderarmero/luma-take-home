@@ -181,4 +181,13 @@ export const MIGRATIONS: ReadonlyArray<{ name: string; sql: string }> = [
       create index sessions_expiry_idx on sessions (expires_at);
     `,
   },
+  {
+    name: "0006_product_permalink",
+    sql: `
+      -- Captured once when the product's message is posted, so the overview
+      -- page can link straight into the conversation about a shot without a
+      -- Slack API call per row at render time.
+      alter table batch_rows add column permalink text;
+    `,
+  },
 ];

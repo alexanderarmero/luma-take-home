@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { getCookie } from "hono/cookie";
 import type { DbStatus } from "../db/bootstrap.js";
 import {
   buildUploadModal,
@@ -21,7 +22,6 @@ import type { PromptWriter } from "../generation/prompts.js";
 import { startGeneration } from "../generation/start.js";
 import type { ImageModel } from "../pricing.js";
 import { buildStatusSummary } from "../status/status.js";
-import { confirmBatch, CONFIRM_ACTION_ID } from "../decisions/confirm.js";
 import {
   ACCESS_ADD_ACTION,
   ACCESS_ADD_BLOCK,
@@ -32,14 +32,17 @@ import {
   revokeIfPermitted,
 } from "../access/commands.js";
 import { buildHelp } from "../access/help.js";
-import { canAdminister, createMagicLink, findSession, redeemMagicLink } from "../access/store.js";
+import {
+  canAdminister,
+  canWrite,
+  createMagicLink,
+  findSession,
+  redeemMagicLink,
+} from "../access/store.js";
+import { confirmBatch } from "../decisions/confirm.js";
 import { decide } from "../decisions/decide.js";
 import { buildApprovedCatalog } from "../export/catalog.js";
 import { buildLatestExport } from "../export/zip.js";
-import {
-  APPROVE_ACTION_ID,
-  DISCARD_ACTION_ID,
-} from "../generation/message.js";
 import { renderReviewPage } from "../review/page.js";
 import { buildReviewState } from "../review/state.js";
 import type { ObjectStore } from "../storage/store.js";
@@ -329,12 +332,41 @@ export function createApp(deps: AppDeps) {
     );
   });
 
-  /** The read-only overview. Unguessable token, no login, no actions. */
+  /**
+   * Who, if anyone, this request may act as.
+   *
+   * The session answers "who are you"; the access list answers "may you act",
+   * and it is consulted on every request rather than cached at sign-in — so
+   * revoking someone takes effect at once rather than in a day.
+   */
+  const resolveWriter = async (
+    c: { req: { raw: Request } },
+  ): Promise<string | null> => {
+    const sessionId = getCookie(c as never, "luma_session");
+    if (!sessionId) return null;
+
+    const session = await findSession(deps.db, sessionId, deps.now());
+    if (!session) return null;
+
+    const allowed = await canWrite(
+      deps.db,
+      session.slackUserId,
+      deps.approverUserId ?? "",
+    );
+    return allowed ? session.slackUserId : null;
+  };
+
+  /**
+   * The overview. Read-only unless the request carries a session belonging to
+   * someone with write access.
+   */
   app.get("/review/:token", async (c) => {
     const token = c.req.param("token");
     const state = await buildReviewState(deps.db, token);
     if (!state) return c.text("Not found", 404);
-    return c.html(renderReviewPage(state, token));
+
+    const writer = await resolveWriter(c);
+    return c.html(renderReviewPage(state, token, { canWrite: writer !== null }));
   });
 
   /** What the page polls. Same state, as JSON. */
@@ -342,6 +374,86 @@ export function createApp(deps: AppDeps) {
     const state = await buildReviewState(deps.db, c.req.param("token"));
     if (!state) return c.json({ error: "not_found" }, 404);
     return c.json(state, 200, { "cache-control": "no-store" });
+  });
+
+  /** Approve or discard one photo. */
+  app.post("/api/review/:token/decide", async (c) => {
+    const state = await buildReviewState(deps.db, c.req.param("token"));
+    if (!state) return c.json({ error: "not_found" }, 404);
+
+    const writer = await resolveWriter(c);
+    if (!writer) return c.json({ error: "not_allowed" }, 403);
+    if (!deps.slack || !deps.reviewChannelId) {
+      return c.json({ error: "not_configured" }, 503);
+    }
+
+    const body = (await c.req.json().catch(() => null)) as {
+      imageId?: string;
+      decision?: "approve" | "discard";
+    } | null;
+
+    if (!body?.imageId || (body.decision !== "approve" && body.decision !== "discard")) {
+      return c.json({ error: "bad_request" }, 400);
+    }
+
+    const outcome = await decide({
+      db: deps.db,
+      slack: deps.slack,
+      channel: deps.reviewChannelId,
+      imageId: body.imageId,
+      decision: body.decision,
+      actorUserId: writer,
+      // Already authorised above, against the list rather than one identity.
+      approverUserId: writer,
+      ...(deps.publicBaseUrl ? { reviewUrl: `${deps.publicBaseUrl}/review/${c.req.param("token")}` } : {}),
+      log: (message) => console.log(message),
+    });
+
+    return outcome.ok
+      ? c.json({ ok: true })
+      : c.json({ error: "refused", reason: outcome.reason }, 409);
+  });
+
+  /** Freeze the batch and hand it over. */
+  app.post("/api/review/:token/confirm", async (c) => {
+    const state = await buildReviewState(deps.db, c.req.param("token"));
+    if (!state) return c.json({ error: "not_found" }, 404);
+
+    const writer = await resolveWriter(c);
+    if (!writer) return c.json({ error: "not_allowed" }, 403);
+
+    const outcome = await confirmBatch({ db: deps.db, batchId: state.batchId });
+    if (!outcome.ok) {
+      return c.json({ error: "refused", reason: outcome.reason }, 409);
+    }
+
+    if (deps.slack && deps.reviewChannelId) {
+      const { slack, reviewChannelId } = deps;
+      deps.defer(async () => {
+        await slack.postMessage({
+          channel: reviewChannelId,
+          text:
+            `*Batch #${outcome.batchId} is confirmed* by <@${writer}>. ` +
+            `${outcome.approved} ${outcome.approved === 1 ? "photo is" : "photos are"} ` +
+            "ready to publish — run `/luma export` to download them.",
+        });
+        if (deps.publicBaseUrl) {
+          const csv = await buildApprovedCatalog(
+            deps.db,
+            outcome.batchId,
+            deps.publicBaseUrl,
+          );
+          await slack.uploadFile({
+            channel: reviewChannelId,
+            filename: csv.filename,
+            title: csv.filename,
+            bytes: Buffer.from(csv.content, "utf8"),
+          });
+        }
+      });
+    }
+
+    return c.json({ ok: true });
   });
 
   app.post("/slack/interactions", async (c) => {
@@ -422,57 +534,6 @@ export function createApp(deps: AppDeps) {
     const channel = payload.channel?.id;
     const ts = payload.message?.ts;
 
-    if (action?.action_id === CONFIRM_ACTION_ID && deps.slack && deps.reviewChannelId) {
-      const { slack, reviewChannelId, approverUserId } = deps;
-      const batchId = Number(action.value);
-      const responseUrl = payload.response_url;
-
-      deps.defer(async () => {
-        // Fail closed: two missing values must not compare equal and let an
-        // unidentified click through the only authorisation in this path.
-        const outcome =
-          userId && approverUserId
-            ? await confirmBatch({
-                db: deps.db,
-                batchId,
-                actorUserId: userId,
-                approverUserId,
-              })
-            : ({ ok: false, reason: "I can't tell who you are." } as const);
-
-        if (!outcome.ok) {
-          if (responseUrl) await slack.respondEphemeral(responseUrl, outcome.reason);
-          return;
-        }
-
-        await slack.postMessage({
-          channel: reviewChannelId,
-          text:
-            `*Batch #${outcome.batchId} is confirmed.* ${outcome.approved} ` +
-            `${outcome.approved === 1 ? "photo is" : "photos are"} ready to publish — ` +
-            "run `/luma export` to download them.",
-        });
-
-        // The one artefact that writes back to the spreadsheet the team lives
-        // in: which requests are actually done.
-        if (deps.publicBaseUrl) {
-          const csv = await buildApprovedCatalog(
-            deps.db,
-            outcome.batchId,
-            deps.publicBaseUrl,
-          );
-          await slack.uploadFile({
-            channel: reviewChannelId,
-            filename: csv.filename,
-            title: csv.filename,
-            bytes: Buffer.from(csv.content, "utf8"),
-          });
-        }
-      });
-
-      return c.body(null, 200);
-    }
-
     if (action?.action_id?.startsWith(`${ACCESS_REVOKE_ACTION}:`) && deps.slack) {
       const { slack } = deps;
       const target = action.value ?? "";
@@ -496,45 +557,6 @@ export function createApp(deps: AppDeps) {
             viewId,
             view: await buildAccessModal(deps.db, deps.approverUserId ?? ""),
           });
-        }
-      });
-
-      return c.body(null, 200);
-    }
-
-    const isDecision =
-      action?.action_id === APPROVE_ACTION_ID ||
-      action?.action_id === DISCARD_ACTION_ID;
-
-    if (isDecision && deps.slack && deps.reviewChannelId && action.value) {
-      const { slack, reviewChannelId, approverUserId } = deps;
-      const imageId = action.value;
-      const decision =
-        action.action_id === APPROVE_ACTION_ID ? "approve" : "discard";
-      const responseUrl = payload.response_url;
-
-      // Recording and redrawing both take longer than the acknowledgement
-      // window allows, so the click is answered first and the work follows.
-      deps.defer(async () => {
-        // Fail closed, as above.
-        const outcome =
-          userId && approverUserId
-            ? await decide({
-                db: deps.db,
-                slack,
-                channel: reviewChannelId,
-                imageId,
-                decision,
-                actorUserId: userId,
-                approverUserId,
-                log: (message) => console.log(message),
-              })
-            : ({ ok: false, reason: "I can't tell who you are." } as const);
-
-        // A refusal is told only to the person who clicked. Announcing it to
-        // the channel would be a public correction of a private mistake.
-        if (!outcome.ok && responseUrl) {
-          await slack.respondEphemeral(responseUrl, outcome.reason);
         }
       });
 

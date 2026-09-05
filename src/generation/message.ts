@@ -1,9 +1,6 @@
 import type { ProductImage } from "../db/repository.js";
 import type { Block } from "../slack/client.js";
 
-export const APPROVE_ACTION_ID = "approve_image";
-export const DISCARD_ACTION_ID = "discard_image";
-
 /** Why a candidate never arrived, in words the team can act on. */
 const FAILURE_REASONS: Record<string, string> = {
   content_moderated: "the prompt or the photo tripped the content filter",
@@ -24,6 +21,8 @@ export interface ProductChannelInput {
   productName: string;
   shotIdea: string | null;
   images: ProductImage[];
+  /** Deep link into the overview page, anchored at this product. */
+  reviewUrl?: string;
 }
 
 /**
@@ -39,7 +38,7 @@ export function buildProductChannelMessage(input: ProductChannelInput): {
   text: string;
   blocks: Block[];
 } {
-  const { sku, productName, shotIdea, images } = input;
+  const { sku, productName, shotIdea, images, reviewUrl } = input;
 
   const usable = images.filter((i) => i.jobState !== "failed");
   const failed = images.filter((i) => i.jobState === "failed");
@@ -81,7 +80,9 @@ export function buildProductChannelMessage(input: ProductChannelInput): {
         elements: [
           {
             type: "mrkdwn",
-            text: `${counts.join(" · ")} — open the thread to review.`,
+            text:
+              `${counts.join(" · ")} — photos are in this thread.` +
+              (reviewUrl ? ` <${reviewUrl}|Review on the overview page>` : ""),
           },
         ],
       },
@@ -105,9 +106,9 @@ export function buildCandidateBlocks(image: ProductImage): Block[] {
     });
   }
 
-  // A decided candidate keeps its outcome and loses its buttons. Leaving them
-  // would make a settled image look undecided, which is the whole reason the
-  // thread is readable as a work queue.
+  // Its outcome, once there is one. Deciding happens on the overview page,
+  // where the whole set is visible at once — the thread is for talking about a
+  // shot, and reads better without a control on every photograph.
   if (image.decision) {
     blocks.push({
       type: "context",
@@ -121,27 +122,7 @@ export function buildCandidateBlocks(image: ProductImage): Block[] {
         },
       ],
     });
-    return blocks;
   }
-
-  blocks.push({
-    type: "actions",
-    elements: [
-      {
-        type: "button",
-        action_id: APPROVE_ACTION_ID,
-        text: { type: "plain_text", text: "Approve", emoji: true },
-        style: "primary",
-        value: image.imageId,
-      },
-      {
-        type: "button",
-        action_id: DISCARD_ACTION_ID,
-        text: { type: "plain_text", text: "Discard", emoji: true },
-        value: image.imageId,
-      },
-    ],
-  });
 
   return blocks;
 }

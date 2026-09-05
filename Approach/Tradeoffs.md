@@ -1256,7 +1256,7 @@ reconsider live sheet sync, which the brief explicitly said nobody was asking fo
 
 ---
 
-## T12 — Cost of D39/D40
+## T13 — Cost of D39/D40
 
 ### T12.1 — The channel stops being browsable
 
@@ -1320,3 +1320,32 @@ is not is worse than any amount of redundant polling.
 **Reversible:** if the page is ever left open for long stretches and the request
 volume matters, SSE with Railway's documented heartbeat-and-reconnect is the
 upgrade. The reason to wait is evidence about the phone, not about the cost.
+
+---
+
+## T14 — Cost of D41–D43 (the write surface)
+
+**T14.1 — Deciding now leaves Slack.** The reviewer taps a link and waits for a
+page. On a phone on mobile data that is a second or two before the first
+photograph appears, where the old thread buttons were instant. Accepted
+because the thing being paid for is seeing three candidates at once, which is
+the actual decision.
+
+**T14.2 — Sign-in is a step that did not exist.** `/luma signin`, open the
+link, then decide. It is once every 24 hours rather than once per decision,
+and it is what makes revocation meaningful — but the first-time cost is real,
+and it is why the read-only page tells a signed-out reader exactly which
+command to run rather than just refusing.
+
+**T14.3 — Two sources of write authority.** Slack's own channel membership no
+longer governs who can act; `write_access` does. That is a second list to keep
+in step with the first, and it can drift — someone removed from the workspace
+keeps a row until Ellie revokes it. Accepted for v1 because the list is small
+and the blast radius of a stale entry is bounded by the session lifetime;
+noted as the obvious thing to wire to Slack's user directory later.
+
+**T14.4 — The page polls.** Every open page hits `/api/review/:token` every
+4 seconds while generating and every 15 afterwards. For a handful of reviewers
+this is nothing; it is not a design that survives a hundred readers. The
+revision check means a poll that finds nothing changed costs one query and no
+render, which is what makes the always-on poll affordable at all.

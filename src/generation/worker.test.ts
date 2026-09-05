@@ -126,18 +126,16 @@ describe("a styled image, end to end", () => {
     expect(submit.mock.calls[0]![0]).toMatchObject({ sourceUrl: PHOTO });
   });
 
-  it("puts Approve and Discard on every image", async () => {
+  it("carries no decision controls in the thread", async () => {
     const batch = await seed([{ sku: "HG-002", shotIdea: "morning kitchen" }]);
     await startGeneration(db, batch.id);
     await drain(deps(), { batchId: batch.id });
 
-    // A decision pair on each candidate, in the thread — not one for the
-    // product as a whole.
+    // No controls in Slack: the thread is for talking about a shot, and
+    // deciding happens on the page where the whole set is visible at once.
     expect(slack.uploads).toHaveLength(3);
     for (const upload of slack.uploads) {
-      const blocks = JSON.stringify(upload.blocks);
-      expect(blocks).toContain("approve_image");
-      expect(blocks).toContain("discard_image");
+      expect(JSON.stringify(upload.blocks)).not.toContain("actions");
     }
   });
 

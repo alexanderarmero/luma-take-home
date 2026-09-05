@@ -9,6 +9,7 @@ import { PRICING, type ImageModel } from "../pricing.js";
 export type CandidateState = "generating" | "ready" | "approved" | "discarded" | "failed";
 
 export interface CandidateView {
+  imageId: string;
   filename: string;
   /** Absent until the image has been stored. */
   imageUrl: string | null;
@@ -22,6 +23,8 @@ export interface ProductView {
   productName: string;
   shotIdea: string | null;
   isPassThrough: boolean;
+  /** Straight into this product's Slack conversation. */
+  threadUrl: string | null;
   candidates: CandidateView[];
 }
 
@@ -95,6 +98,7 @@ export async function buildReviewState(
       }
 
       return {
+        imageId: image.imageId,
         filename: image.filename,
         imageUrl: image.objectKey
           ? `/img/${image.objectKey.replace(/^images\//, "").replace(/\.jpg$/, "")}`
@@ -110,6 +114,7 @@ export async function buildReviewState(
       productName: product.productName,
       shotIdea: product.shotIdea,
       isPassThrough,
+      threadUrl: product.permalink,
       candidates,
     };
   });

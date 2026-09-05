@@ -26,6 +26,8 @@ export interface DecideInput {
   decision: Decision;
   actorUserId: string;
   approverUserId: string;
+  /** Included in the product's line so Slack links back to the page. */
+  reviewUrl?: string;
   log?: (message: string) => void;
 }
 
@@ -75,6 +77,7 @@ export async function decide(input: DecideInput): Promise<DecisionOutcome> {
       productName: product.productName,
       shotIdea: product.shotIdea,
       images: product.images,
+      ...(input.reviewUrl ? { reviewUrl: `${input.reviewUrl}#p-${location.sku}` } : {}),
     });
     try {
       await slack.updateMessage({
@@ -113,6 +116,7 @@ export async function decide(input: DecideInput): Promise<DecisionOutcome> {
       batchId: location.batchId,
       batchState: await getBatchState(db, location.batchId),
       approverUserId,
+      ...(input.reviewUrl ? { reviewUrl: input.reviewUrl } : {}),
     });
   } catch (error) {
     log(`[decide] could not offer confirmation: ${(error as Error).message}`);

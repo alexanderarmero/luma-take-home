@@ -693,10 +693,12 @@ export async function setProductMessageTs(
   batchId: number,
   sku: string,
   messageTs: string,
+  permalink?: string,
 ): Promise<void> {
   await db.query(
-    `update batch_rows set message_ts = $3 where batch_id = $1 and sku = $2`,
-    [batchId, sku, messageTs],
+    `update batch_rows set message_ts = $3, permalink = coalesce($4, permalink)
+      where batch_id = $1 and sku = $2`,
+    [batchId, sku, messageTs, permalink ?? null],
   );
 }
 
@@ -707,6 +709,8 @@ export interface ProductSummary {
   productName: string;
   shotIdea: string | null;
   messageTs: string | null;
+  /** A link straight into this product's Slack thread. */
+  permalink: string | null;
   images: ProductImage[];
 }
 
@@ -720,6 +724,7 @@ export async function getBatchProducts(
     product_name: string;
     shot_idea: string | null;
     message_ts: string | null;
+    permalink: string | null;
     image_id: string | null;
     slot: number | null;
     filename: string | null;
@@ -730,7 +735,7 @@ export async function getBatchProducts(
     failure_code: string | null;
     decision: string | null;
   }>(
-    `select r.sku, r.product_name, r.shot_idea, r.message_ts,
+    `select r.sku, r.product_name, r.shot_idea, r.message_ts, r.permalink,
             i.id as image_id, i.slot, i.filename, i.prompt, i.kind,
             i.object_key, j.state, j.failure_code,
             case
@@ -758,6 +763,7 @@ export async function getBatchProducts(
         productName: row.product_name,
         shotIdea: row.shot_idea,
         messageTs: row.message_ts,
+        permalink: row.permalink,
         images: [],
       };
       products.set(row.sku, product);
