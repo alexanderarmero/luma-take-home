@@ -22,6 +22,17 @@ import { startGeneration } from "../generation/start.js";
 import type { ImageModel } from "../pricing.js";
 import { buildStatusSummary } from "../status/status.js";
 import { confirmBatch, CONFIRM_ACTION_ID } from "../decisions/confirm.js";
+import {
+  ACCESS_ADD_ACTION,
+  ACCESS_ADD_BLOCK,
+  ACCESS_CALLBACK_ID,
+  ACCESS_REVOKE_ACTION,
+  applyAccessChanges,
+  buildAccessModal,
+  revokeIfPermitted,
+} from "../access/commands.js";
+import { buildHelp } from "../access/help.js";
+import { canAdminister, createMagicLink, findSession, redeemMagicLink } from "../access/store.js";
 import { decide } from "../decisions/decide.js";
 import { buildApprovedCatalog } from "../export/catalog.js";
 import { buildLatestExport } from "../export/zip.js";
@@ -67,15 +78,6 @@ export interface AppDeps {
   promptWriterFor?: (brand: BrandContext) => PromptWriter;
 }
 
-const USAGE = [
-  "Commands I know:",
-  "• `/luma ping` — check I'm awake",
-  "• `/luma upload` — drop in a catalog CSV",
-  "• `/luma status` — where the latest batch stands",
-  "• `/luma export` — download the approved photos of the latest confirmed batch",
-  "• `/luma verify` — post the platform-verification probes",
-].join("\n");
-
 /** Slack renders this only to the person who typed the command. */
 function ephemeral(text: string) {
   return { response_type: "ephemeral" as const, text };
@@ -114,6 +116,7 @@ export function createApp(deps: AppDeps) {
     }
 
     const params = new URLSearchParams(raw);
+    const userId = params.get("user_id") ?? "";
     const [subcommand = ""] = (params.get("text") ?? "").trim().split(/\s+/);
 
     switch (subcommand) {
@@ -226,8 +229,50 @@ export function createApp(deps: AppDeps) {
         return c.json(ephemeral("Posting three probes to the review channel…"));
       }
 
+      case "help":
+        return c.json(
+          ephemeral(
+            buildHelp(canAdminister(userId, deps.approverUserId ?? "")),
+          ),
+        );
+
+      case "signin": {
+        if (!deps.publicBaseUrl) {
+          return c.json(ephemeral("Sign-in isn't configured on this instance."));
+        }
+        // Answered privately to whoever typed it. Slack already knows who that
+        // is, which is the whole reason this needs no email provider.
+        const token = await createMagicLink(deps.db, userId, deps.now());
+        return c.json(
+          ephemeral(
+            `*Your sign-in link* — ${deps.publicBaseUrl}/auth/${token}\n` +
+              "_Good for ten minutes and one use. Signing in lasts a day._",
+          ),
+        );
+      }
+
+      case "access": {
+        const { slack } = deps;
+        const triggerId = params.get("trigger_id");
+        if (!slack || !triggerId) {
+          return c.json(ephemeral("Access management isn't configured here."));
+        }
+        if (!canAdminister(userId, deps.approverUserId ?? "")) {
+          return c.json(
+            ephemeral("Only the configured approver can change who has access."),
+          );
+        }
+        await slack.openView({
+          triggerId,
+          view: await buildAccessModal(deps.db, deps.approverUserId ?? ""),
+        });
+        return c.body(null, 200);
+      }
+
       default:
-        return c.json(ephemeral(USAGE));
+        return c.json(
+          ephemeral(buildHelp(canAdminister(userId, deps.approverUserId ?? ""))),
+        );
     }
   });
 
@@ -257,6 +302,31 @@ export function createApp(deps: AppDeps) {
     } catch {
       return c.text("not found", 404);
     }
+  });
+
+  /**
+   * Trades a magic link for a session.
+   *
+   * The cookie carries the right to act; the batch token in a review URL
+   * carries the right to see. Keeping them apart is what makes forwarding a
+   * link share reading and never writing.
+   */
+  app.get("/auth/:token", async (c) => {
+    const session = await redeemMagicLink(deps.db, c.req.param("token"), deps.now());
+    if (!session) {
+      return c.html(
+        signInResult("That link has expired or been used already. Run `/luma signin` in Slack for a fresh one."),
+        400,
+      );
+    }
+
+    c.header(
+      "set-cookie",
+      `luma_session=${session.id}; Path=/; Max-Age=86400; HttpOnly; Secure; SameSite=Lax`,
+    );
+    return c.html(
+      signInResult("You're signed in for the next day. Open the batch link from Slack to review."),
+    );
   });
 
   /** The read-only overview. Unguessable token, no login, no actions. */
@@ -302,7 +372,23 @@ export function createApp(deps: AppDeps) {
       return c.body(null, 200);
     }
 
+    const userId = payload.user?.id;
+
     if (payload.type === "view_submission") {
+      if (payload.view?.callback_id === ACCESS_CALLBACK_ID) {
+        const added =
+          payload.view?.state?.values?.[ACCESS_ADD_BLOCK]?.[ACCESS_ADD_ACTION]
+            ?.selected_users ?? [];
+        deps.defer(async () => {
+          await applyAccessChanges(deps.db, {
+            actorUserId: userId ?? "",
+            approverUserId: deps.approverUserId ?? "",
+            addUserIds: added,
+          });
+        });
+        return c.body(null, 200);
+      }
+
       if (payload.view?.callback_id !== UPLOAD_CALLBACK_ID) return c.body(null, 200);
 
       const file =
@@ -335,7 +421,6 @@ export function createApp(deps: AppDeps) {
     const action = payload.actions?.[0];
     const channel = payload.channel?.id;
     const ts = payload.message?.ts;
-    const userId = payload.user?.id;
 
     if (action?.action_id === CONFIRM_ACTION_ID && deps.slack && deps.reviewChannelId) {
       const { slack, reviewChannelId, approverUserId } = deps;
@@ -381,6 +466,35 @@ export function createApp(deps: AppDeps) {
             filename: csv.filename,
             title: csv.filename,
             bytes: Buffer.from(csv.content, "utf8"),
+          });
+        }
+      });
+
+      return c.body(null, 200);
+    }
+
+    if (action?.action_id?.startsWith(`${ACCESS_REVOKE_ACTION}:`) && deps.slack) {
+      const { slack } = deps;
+      const target = action.value ?? "";
+      const viewId = payload.view?.id;
+      const responseUrl = payload.response_url;
+
+      deps.defer(async () => {
+        const outcome = await revokeIfPermitted(deps.db, {
+          actorUserId: userId ?? "",
+          approverUserId: deps.approverUserId ?? "",
+          targetUserId: target,
+        });
+
+        if (!outcome.ok) {
+          if (responseUrl) await slack.respondEphemeral(responseUrl, outcome.reason!);
+          return;
+        }
+        // Redraw the modal so the row disappears rather than lingering.
+        if (viewId) {
+          await slack.updateView({
+            viewId,
+            view: await buildAccessModal(deps.db, deps.approverUserId ?? ""),
           });
         }
       });
@@ -521,6 +635,21 @@ export function createApp(deps: AppDeps) {
   return app;
 }
 
+/** Deliberately plain: it is a waypoint, not a destination. */
+function signInResult(message: string): string {
+  return `<!doctype html><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Luma</title>
+<style>
+  :root{color-scheme:light dark}
+  body{margin:0;min-height:100vh;display:grid;place-items:center;
+       font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       padding:24px;text-align:center}
+  p{max-width:32ch}
+</style>
+<p>${message}</p>`;
+}
+
 interface SlackFile {
   id?: string;
   name?: string;
@@ -535,9 +664,13 @@ interface BlockActionsPayload {
   message?: { ts?: string };
   actions?: Array<{ action_id?: string; value?: string }>;
   view?: {
+    id?: string;
     callback_id?: string;
     state?: {
-      values?: Record<string, Record<string, { files?: SlackFile[] }>>;
+      values?: Record<
+        string,
+        Record<string, { files?: SlackFile[]; selected_users?: string[] }>
+      >;
     };
   };
 }

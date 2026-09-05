@@ -158,18 +158,19 @@ describe("POST /slack/commands", () => {
     expect(deferred).toHaveLength(1);
   });
 
-  it("answers an unrecognised subcommand with usage rather than an error", async () => {
+  it("answers an unrecognised subcommand with the glossary rather than an error", async () => {
     const res = await app().request(slashCommand({ text: "wat" }));
     expect(res.status).toBe(200);
     const payload = (await res.json()) as { text: string };
-    expect(payload.text.toLowerCase()).toContain("ping");
+    expect(payload.text).toContain("/luma upload");
+    expect(payload.text).toContain("/luma status");
   });
 
-  it("treats a bare command with no text as usage", async () => {
+  it("treats a bare command with no text as the glossary", async () => {
     const res = await app().request(slashCommand({ text: "" }));
     expect(res.status).toBe(200);
     const payload = (await res.json()) as { text: string };
-    expect(payload.text.toLowerCase()).toContain("ping");
+    expect(payload.text).toContain("What I can do");
   });
 });
 
@@ -199,10 +200,10 @@ describe("/luma status", () => {
     expect(payload.text).toContain("catalog.csv");
   });
 
-  it("is listed in the usage text so it is discoverable", async () => {
+  it("is listed in the glossary so it is discoverable", async () => {
     const res = await app().request(slashCommand({ text: "wat" }));
     const payload = (await res.json()) as { text: string };
-    expect(payload.text).toContain("status");
+    expect(payload.text).toContain("/luma status");
   });
 
   it("says something a person can act on when the database is unreachable", async () => {

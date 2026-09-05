@@ -11,6 +11,7 @@ export interface FakeSlack extends SlackClient {
   updates: UpdateMessageInput[];
   uploads: UploadFileInput[];
   views: Array<{ triggerId: string; view: Record<string, unknown> }>;
+  viewUpdates: Array<{ viewId: string; view: Record<string, unknown> }>;
   /** Contents returned by downloadFile, keyed by URL. */
   files: Map<string, string>;
   reset(): void;
@@ -31,6 +32,7 @@ export function createFakeSlack(): FakeSlack {
     updates: [],
     uploads: [],
     views: [],
+    viewUpdates: [],
     files: new Map(),
 
     postMessage: async (input) => {
@@ -47,6 +49,9 @@ export function createFakeSlack(): FakeSlack {
     },
     openView: async (input) => {
       fake.views.push(input);
+    },
+    updateView: async (input) => {
+      fake.viewUpdates.push(input);
     },
     getPermalink: async (channel, messageTs) =>
       `https://example.slack.com/archives/${channel}/p${messageTs.replace(".", "")}`,
@@ -69,6 +74,7 @@ export function createFakeSlack(): FakeSlack {
       fake.ephemerals.length = 0;
       fake.uploads.length = 0;
       fake.views.length = 0;
+      fake.viewUpdates.length = 0;
       fake.files.clear();
     },
   };

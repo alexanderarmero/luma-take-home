@@ -146,4 +146,39 @@ export const MIGRATIONS: ReadonlyArray<{ name: string; sql: string }> = [
       alter table batch_rows add column message_ts text;
     `,
   },
+  {
+    name: "0005_write_access",
+    sql: `
+      -- Who may act on the review page. The configured approver is not in
+      -- here: they are implicitly an admin, so removing the last granted user
+      -- can never lock everyone out.
+      create table write_access (
+        slack_user_id text        primary key,
+        granted_by    text        not null,
+        granted_at    timestamptz not null default now()
+      );
+
+      -- Single-use, short-lived, exchanged for a session. Delivered by the bot
+      -- over Slack DM, so the identity is one we already verify rather than
+      -- one an inbox vouches for.
+      create table magic_links (
+        token         text        primary key,
+        slack_user_id text        not null,
+        created_at    timestamptz not null default now(),
+        expires_at    timestamptz not null,
+        used_at       timestamptz
+      );
+
+      -- Says who you are, never what you may do: write access is checked on
+      -- every action, so revoking it takes effect at once rather than in 24
+      -- hours.
+      create table sessions (
+        id            text        primary key,
+        slack_user_id text        not null,
+        created_at    timestamptz not null default now(),
+        expires_at    timestamptz not null
+      );
+      create index sessions_expiry_idx on sessions (expires_at);
+    `,
+  },
 ];
