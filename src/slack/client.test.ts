@@ -263,3 +263,47 @@ describe("downloadFile", () => {
     ).rejects.toThrow(/404/);
   });
 });
+
+describe("error reporting", () => {
+  it("includes the field-level detail Slack sends with invalid_blocks", async () => {
+    // The bare code says a message was rejected but not which block or field.
+    // Discarding the detail turns a one-line fix into guesswork.
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({
+        ok: false,
+        error: "invalid_blocks",
+        response_metadata: {
+          messages: ["[ERROR] missing required field: alt_text [json-pointer:/blocks/1]"],
+        },
+      }),
+    ) as unknown as typeof fetch;
+
+    await expect(
+      clientWith(fetchImpl).postMessage({ channel: "C1", text: "hi" }),
+    ).rejects.toThrow(/alt_text.*json-pointer/);
+  });
+
+  it("includes an errors array when Slack sends one", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({
+        ok: false,
+        error: "invalid_blocks",
+        errors: ["invalid_blocks_format"],
+      }),
+    ) as unknown as typeof fetch;
+
+    await expect(
+      clientWith(fetchImpl).postMessage({ channel: "C1", text: "hi" }),
+    ).rejects.toThrow(/invalid_blocks_format/);
+  });
+
+  it("still reports the bare code when there is no detail", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ ok: false, error: "channel_not_found" }),
+    ) as unknown as typeof fetch;
+
+    await expect(
+      clientWith(fetchImpl).postMessage({ channel: "C1", text: "hi" }),
+    ).rejects.toThrow(/channel_not_found/);
+  });
+});
