@@ -7,7 +7,11 @@ import { tick } from "../generation/loop.js";
 import { createMemoryStore, type MemoryStore } from "../storage/memory.js";
 import { createTestDb, type TestDb } from "../db/testing.js";
 import { createApp } from "../slack/app.js";
-import { createFakeSlack, type FakeSlack } from "../slack/testing.js";
+import {
+  allImageFilenames,
+  createFakeSlack,
+  type FakeSlack,
+} from "../slack/testing.js";
 import { GENERATE_ACTION_ID, UPLOAD_CALLBACK_ID } from "./ingest.js";
 
 const SECRET = "test-signing-secret";
@@ -183,7 +187,7 @@ describe("submitting the catalog", () => {
   it("spends nothing", async () => {
     await app().request(viewSubmission());
     await drain();
-    expect(slack.uploads).toHaveLength(0);
+    expect(allImageFilenames(slack.posts)).toHaveLength(0);
   });
 
   it("never puts the CSV itself into the review channel", async () => {
@@ -267,6 +271,7 @@ describe("the Generate button", () => {
         channel: "C_REVIEW",
         model: "uni-1-max",
         aspectRatio: "1:1",
+        publicBaseUrl: "https://shots.test",
         fetch: fetchImage,
         sleep: async () => {},
       },
@@ -279,7 +284,7 @@ describe("the Generate button", () => {
     const { res } = await uploadThenPressGenerate();
     expect(res.status).toBe(200);
     expect(slack.posts).toHaveLength(0);
-    expect(slack.uploads).toHaveLength(0);
+    expect(allImageFilenames(slack.posts)).toHaveLength(0);
   });
 
   it("announces the run in the team's terms before doing it", async () => {
@@ -290,7 +295,7 @@ describe("the Generate button", () => {
     expect(announcement).toContain("*48* styled photos");
     expect(announcement).toContain("*24* original photos");
     // Announced immediately; nothing generated yet.
-    expect(slack.uploads).toHaveLength(0);
+    expect(allImageFilenames(slack.posts)).toHaveLength(0);
   });
 
   it("sets the expectation that photos take time and arrive in sets", async () => {
@@ -309,8 +314,13 @@ describe("the Generate button", () => {
     await generateAndRunWorker();
 
     // 16 shot ideas at 3 candidates each, plus 24 originals passed through.
-    expect(slack.uploads).toHaveLength(72);
+    expect(allImageFilenames(slack.posts)).toHaveLength(72);
     expect(store.objects.size).toBe(72);
+
+    // 40 products, so 40 review messages rather than 72 — a third fewer
+    // notifications and a channel that scrolls in product-sized chunks.
+    const reviewMessages = slack.posts.filter((p) => /^HG-\d+ · /.test(p.text));
+    expect(reviewMessages).toHaveLength(40);
   });
 
   it("mentions the approver exactly once, at the end", async () => {
@@ -326,7 +336,9 @@ describe("the Generate button", () => {
   it("charges nothing for the products with no shot idea", async () => {
     await generateAndRunWorker();
 
-    const originals = slack.uploads.filter((u) => u.filename.endsWith("_original.jpg"));
+    const originals = allImageFilenames(slack.posts).filter((f) =>
+      f.endsWith("_original.jpg"),
+    );
     expect(originals).toHaveLength(24);
   });
 });

@@ -64,6 +64,7 @@ const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
         store,
         slack,
         channel: config.slack.reviewChannelId,
+        publicBaseUrl: config.publicBaseUrl,
         model: "uni-1-max",
         aspectRatio: "1:1",
         log: (message) => console.log(message),

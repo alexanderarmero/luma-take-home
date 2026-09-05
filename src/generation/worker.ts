@@ -1,18 +1,19 @@
 import type { SqlClient } from "../db/client.js";
 import {
   claimNextJob,
-  markImagePosted,
+  getProductImages,
   markImageStored,
+  markProductPosted,
   setJobState,
   type PipelineJob,
 } from "../db/repository.js";
 import type { ImageModel } from "../pricing.js";
-import type { Block, SlackClient } from "../slack/client.js";
+import type { SlackClient } from "../slack/client.js";
 import type { ObjectStore } from "../storage/store.js";
 import { GenerationError, type ImageGenerator } from "./generator.js";
+import { buildProductMessage } from "./message.js";
 
-export const APPROVE_ACTION_ID = "approve_image";
-export const DISCARD_ACTION_ID = "discard_image";
+export { APPROVE_ACTION_ID, DISCARD_ACTION_ID } from "./message.js";
 
 /** Beyond this a job is failing for a reason retrying will not fix. */
 const MAX_ATTEMPTS = 4;
@@ -25,6 +26,8 @@ export interface WorkerDeps {
   channel: string;
   model: ImageModel;
   aspectRatio: string;
+  /** Where Slack fetches images from — the deployed service's own URL. */
+  publicBaseUrl: string;
   fetch?: typeof fetch;
   log?: (message: string) => void;
   /** Injected so the poll loop can be driven without real time in tests. */
@@ -38,45 +41,6 @@ export type StepResult =
   | { kind: "waiting"; imageId: string }
   /** No job is available at all. */
   | { kind: "idle" };
-
-function decisionBlocks(job: PipelineJob): Block[] {
-  const caption =
-    job.kind === "pass_through"
-      ? `*${job.filename}*\n_Original photo — no shot idea was given for this product, so nothing was changed._`
-      : `*${job.filename}*`;
-
-  const blocks: Block[] = [{ type: "section", text: { type: "mrkdwn", text: caption } }];
-
-  if (job.prompt) {
-    // A context block keeps the prompt visible without letting it compete with
-    // the image in a stream that has to stay scannable.
-    blocks.push({
-      type: "context",
-      elements: [{ type: "mrkdwn", text: `Prompt: ${job.prompt}` }],
-    });
-  }
-
-  blocks.push({
-    type: "actions",
-    elements: [
-      {
-        type: "button",
-        action_id: APPROVE_ACTION_ID,
-        text: { type: "plain_text", text: "Approve", emoji: true },
-        style: "primary",
-        value: job.imageId,
-      },
-      {
-        type: "button",
-        action_id: DISCARD_ACTION_ID,
-        text: { type: "plain_text", text: "Discard", emoji: true },
-        value: job.imageId,
-      },
-    ],
-  });
-
-  return blocks;
-}
 
 async function download(
   url: string,
@@ -183,21 +147,29 @@ export async function runOnce(
       }
 
       case "stored": {
-        const { bytes } = await deps.store.get(job.objectKey!);
-
-        // Uploaded to Slack rather than referenced: the channel is the
-        // permanent record and should not break if our storage does. The same
-        // bytes go up that were stored — never a re-encode, so the file that
-        // ships is provably the file that was approved.
-        const { ts } = await deps.slack.uploadImage({
-          channel: deps.channel,
-          filename: job.filename,
-          title: job.filename,
-          bytes,
-          blocks: decisionBlocks(job),
+        // The sibling gate means every candidate for this product has settled
+        // by the time one of them is claimable, so the whole set is posted as
+        // a single message with a decision under each image.
+        const product = await getProductImages(deps.db, job.batchId, job.sku);
+        const { text, blocks } = buildProductMessage({
+          sku: job.sku,
+          productName: product.productName,
+          shotIdea: product.shotIdea,
+          images: product.images,
+          publicBaseUrl: deps.publicBaseUrl,
         });
 
-        await markImagePosted(deps.db, job.imageId, ts ?? "");
+        const { ts } = await deps.slack.postMessage({
+          channel: deps.channel,
+          text,
+          blocks,
+        });
+
+        await markProductPosted(
+          deps.db,
+          product.images.filter((i) => i.jobState === "stored").map((i) => i.imageId),
+          ts,
+        );
         return { kind: "worked" };
       }
 

@@ -1,6 +1,8 @@
 export interface Config {
   port: number;
   databaseUrl: string;
+  /** Where Slack fetches our images from. The deployed service's own URL. */
+  publicBaseUrl: string;
   lumaApiKey: string;
   storage: {
     bucket: string;
@@ -24,6 +26,7 @@ type Env = Record<string, string | undefined>;
 
 const REQUIRED = [
   "DATABASE_URL",
+  "PUBLIC_BASE_URL",
   "LUMA_AGENTS_API_KEY",
   "S3_BUCKET",
   "S3_ACCESS_KEY_ID",
@@ -58,6 +61,8 @@ export function loadConfig(env: Env): Config {
   return {
     port,
     databaseUrl: env.DATABASE_URL!.trim(),
+    // Trailing slash removed once here rather than at every use site.
+    publicBaseUrl: env.PUBLIC_BASE_URL!.trim().replace(/\/+$/, ""),
     lumaApiKey: env.LUMA_AGENTS_API_KEY!.trim(),
     storage: {
       bucket: env.S3_BUCKET!.trim(),

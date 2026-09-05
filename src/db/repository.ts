@@ -547,3 +547,85 @@ export async function batchOutcome(
     failed: Number(rows[0]?.failed ?? 0),
   };
 }
+
+export interface ProductImage {
+  imageId: string;
+  slot: number;
+  filename: string;
+  prompt: string | null;
+  kind: ImageKind;
+  objectKey: string | null;
+  jobState: JobState;
+  failureCode: string | null;
+}
+
+/**
+ * Every candidate for one product in one batch, in slot order.
+ *
+ * A product's shots are reviewed together, so they are fetched together —
+ * including the ones that failed, which appear in the message as an
+ * explanation rather than as an image.
+ */
+export async function getProductImages(
+  db: SqlClient,
+  batchId: number,
+  sku: string,
+): Promise<{ productName: string; shotIdea: string | null; images: ProductImage[] }> {
+  const { rows } = await db.query<{
+    image_id: string;
+    slot: number;
+    filename: string;
+    prompt: string | null;
+    kind: ImageKind;
+    object_key: string | null;
+    state: JobState;
+    failure_code: string | null;
+    product_name: string;
+    shot_idea: string | null;
+  }>(
+    `select i.id as image_id, i.slot, i.filename, i.prompt, i.kind,
+            i.object_key, j.state, j.failure_code,
+            i.product_name, r.shot_idea
+       from images i
+       join image_jobs j on j.image_id = i.id
+       join batch_rows r on r.batch_id = i.batch_id and r.sku = i.sku
+      where i.batch_id = $1 and i.sku = $2
+      order by i.slot asc`,
+    [batchId, sku],
+  );
+
+  return {
+    productName: rows[0]?.product_name ?? sku,
+    shotIdea: rows[0]?.shot_idea ?? null,
+    images: rows.map((r) => ({
+      imageId: r.image_id,
+      slot: r.slot,
+      filename: r.filename,
+      prompt: r.prompt,
+      kind: r.kind,
+      objectKey: r.object_key,
+      jobState: r.state,
+      failureCode: r.failure_code,
+    })),
+  };
+}
+
+/** Marks a product's whole set posted against the one message carrying it. */
+export async function markProductPosted(
+  db: SqlClient,
+  imageIds: string[],
+  messageTs: string,
+): Promise<void> {
+  if (imageIds.length === 0) return;
+  await db.transaction(async (tx) => {
+    await tx.query(`update images set message_ts = $2 where id = any($1::uuid[])`, [
+      imageIds,
+      messageTs,
+    ]);
+    await tx.query(
+      `update image_jobs set state = 'posted', updated_at = now()
+        where image_id = any($1::uuid[]) and state = 'stored'`,
+      [imageIds],
+    );
+  });
+}

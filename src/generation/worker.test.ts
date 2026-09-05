@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { addBatchRows, batchCounts, claimNextJob, createBatch } from "../db/repository.js";
 import { createTestDb, type TestDb } from "../db/testing.js";
-import { createFakeSlack, type FakeSlack } from "../slack/testing.js";
+import {
+  allImageFilenames,
+  createFakeSlack,
+  imageFilenames,
+  type FakeSlack,
+} from "../slack/testing.js";
 import { createMemoryStore, type MemoryStore } from "../storage/memory.js";
 import { GenerationError, type ImageGenerator } from "./generator.js";
 import { startGeneration } from "./start.js";
@@ -47,6 +52,7 @@ function deps(gen: ImageGenerator = generator()): WorkerDeps {
     channel: "C_REVIEW",
     model: "uni-1-max",
     aspectRatio: "1:1",
+    publicBaseUrl: "https://shots.test",
     fetch: fetchOk,
   };
 }
@@ -97,10 +103,13 @@ describe("a styled image, end to end", () => {
 
     await drain(deps(), { batchId: batch.id });
 
-    expect(slack.uploads).toHaveLength(3);
-    expect(slack.uploads[0]!.filename).toBe(
+    // One message for the product, carrying all three candidates.
+    expect(slack.posts).toHaveLength(1);
+    expect(imageFilenames(slack.posts[0]!)).toEqual([
       "HG-002_morning-kitchen-counter_01.jpg",
-    );
+      "HG-002_morning-kitchen-counter_02.jpg",
+      "HG-002_morning-kitchen-counter_03.jpg",
+    ]);
     expect(store.objects.size).toBe(3);
   });
 
@@ -122,16 +131,22 @@ describe("a styled image, end to end", () => {
     await startGeneration(db, batch.id);
     await drain(deps(), { batchId: batch.id });
 
-    const blocks = JSON.stringify(slack.uploads[0]!.blocks);
+    const blocks = JSON.stringify(slack.posts[0]!.blocks);
     expect(blocks).toContain("approve_image");
     expect(blocks).toContain("discard_image");
+
+    // One decision pair per candidate, not one for the message.
+    const actions = (slack.posts[0]!.blocks ?? []).filter(
+      (b) => (b as { type: string }).type === "actions",
+    );
+    expect(actions).toHaveLength(3);
   });
 
   it("shows the prompt that produced the image", async () => {
     const batch = await seed([{ sku: "HG-002", shotIdea: "morning kitchen counter" }]);
     await startGeneration(db, batch.id);
     await drain(deps(), { batchId: batch.id });
-    expect(JSON.stringify(slack.uploads[0]!.blocks)).toContain(
+    expect(JSON.stringify(slack.posts[0]!.blocks)).toContain(
       "morning kitchen counter",
     );
   });
@@ -145,7 +160,7 @@ describe("a styled image, end to end", () => {
     await startGeneration(db, batch.id);
     await drain(deps(), { batchId: batch.id });
 
-    expect(slack.uploads.map((u) => u.filename)).toEqual([
+    expect(allImageFilenames(slack.posts)).toEqual([
       "HG-002_morning-kitchen_01.jpg",
       "HG-002_morning-kitchen_02.jpg",
       "HG-002_morning-kitchen_03.jpg",
@@ -153,6 +168,8 @@ describe("a styled image, end to end", () => {
       "HG-005_dinner-table_02.jpg",
       "HG-005_dinner-table_03.jpg",
     ]);
+    // Two products, two messages.
+    expect(slack.posts).toHaveLength(2);
   });
 
   it("uploads exactly the bytes it stored", async () => {
@@ -161,9 +178,12 @@ describe("a styled image, end to end", () => {
     await startGeneration(db, batch.id);
     await drain(deps(), { batchId: batch.id });
 
+    // Slack now renders from our own endpoint, so byte identity is between
+    // what was downloaded and what was stored — the object the export and the
+    // channel both point at.
     const storedBytes = [...store.objects.values()][0]!.bytes;
-    expect(slack.uploads[0]!.bytes.equals(storedBytes)).toBe(true);
-    expect(slack.uploads[0]!.bytes.equals(IMAGE_BYTES)).toBe(true);
+    expect(storedBytes.equals(IMAGE_BYTES)).toBe(true);
+    expect(JSON.stringify(slack.posts[0]!.blocks)).toContain("/img/");
   });
 });
 
@@ -176,9 +196,9 @@ describe("a pass-through", () => {
     await drain(deps(generator({ submit: submit as never })), { batchId: batch.id });
 
     expect(submit).not.toHaveBeenCalled();
-    expect(slack.uploads).toHaveLength(1);
-    expect(slack.uploads[0]!.filename).toBe("HG-001_original.jpg");
-    expect(JSON.stringify(slack.uploads[0]!.blocks)).toContain("nothing was changed");
+    expect(slack.posts).toHaveLength(1);
+    expect(imageFilenames(slack.posts[0]!)).toEqual(["HG-001_original.jpg"]);
+    expect(JSON.stringify(slack.posts[0]!.blocks)).toContain("unchanged");
   });
 });
 
@@ -196,7 +216,7 @@ describe("failures", () => {
     await startGeneration(db, batch.id);
     await drain(deps(generator({ poll })), { batchId: batch.id });
 
-    expect(slack.uploads.length).toBeGreaterThan(0);
+    expect(slack.posts.length).toBeGreaterThan(0);
   });
 
   it("stops on a moderated prompt instead of burning money on retries", async () => {
@@ -212,7 +232,7 @@ describe("failures", () => {
     );
     expect(rows.every((r) => r.state === "failed")).toBe(true);
     expect(rows.every((r) => r.attempts === 0)).toBe(true);
-    expect(slack.uploads).toHaveLength(0);
+    expect(slack.posts).toHaveLength(0);
   });
 
   it("submits everything it can, then waits rather than declaring the batch done", async () => {
@@ -228,7 +248,7 @@ describe("failures", () => {
     // All three candidates get submitted; none can be posted while their
     // generations are still running.
     expect(worked).toBe(3);
-    expect(slack.uploads).toHaveLength(0);
+    expect(slack.posts).toHaveLength(0);
 
     const { rows } = await db.query<{ state: string }>(`select state from image_jobs`);
     expect(rows.every((r) => r.state === "submitted")).toBe(true);
@@ -271,7 +291,7 @@ describe("resuming after a crash", () => {
 
     expect(submitted).not.toContain(resumedImageId);
     expect(submitted).toHaveLength(2); // only the two untouched candidates
-    expect(slack.uploads).toHaveLength(3);
+    expect(allImageFilenames(slack.posts)).toHaveLength(3);
   });
 
   it("keeps the generation id it already paid for", async () => {
@@ -323,7 +343,7 @@ describe("polling a generation that is not instant", () => {
     );
 
     // 1 pass-through + two products at 3 candidates each.
-    expect(slack.uploads).toHaveLength(7);
+    expect(allImageFilenames(slack.posts)).toHaveLength(7);
     expect(store.objects.size).toBe(7);
   });
 
@@ -339,7 +359,7 @@ describe("polling a generation that is not instant", () => {
       { batchId: batch.id },
     );
 
-    expect(slack.uploads).toHaveLength(4);
+    expect(allImageFilenames(slack.posts)).toHaveLength(4);
   });
 
   it("waits between polls instead of spinning", async () => {
@@ -408,7 +428,7 @@ describe("posting order", () => {
       { batchId: batch.id },
     );
 
-    const posted = slack.uploads.map((u) => u.filename);
+    const posted = allImageFilenames(slack.posts);
     const skuOrder = posted.map((f) => f.slice(0, 6));
     // Each product's three appear consecutively, never interleaved.
     expect(new Set(skuOrder.slice(0, 3)).size).toBe(1);
@@ -419,9 +439,9 @@ describe("posting order", () => {
     const batch = await seedTwoProducts();
     await drain({ ...deps(), sleep: async () => {} }, { batchId: batch.id });
 
-    const forProduct = slack.uploads
-      .map((u) => u.filename)
-      .filter((f) => f.startsWith("HG-002"));
+    const forProduct = allImageFilenames(slack.posts).filter((f) =>
+      f.startsWith("HG-002"),
+    );
     expect(forProduct).toEqual([
       "HG-002_morning-kitchen_01.jpg",
       "HG-002_morning-kitchen_02.jpg",
@@ -456,7 +476,7 @@ describe("posting order", () => {
 
     // Nothing posted: the set is incomplete, so it waits rather than
     // dribbling out.
-    expect(slack.uploads).toHaveLength(0);
+    expect(slack.posts).toHaveLength(0);
   });
 
   it("does not let one failed candidate hold its siblings hostage", async () => {
@@ -489,9 +509,12 @@ describe("posting order", () => {
       { batchId: batch.id },
     );
 
-    expect(slack.uploads.map((u) => u.filename)).toEqual([
+    expect(allImageFilenames(slack.posts)).toEqual([
       "HG-002_kitchen_01.jpg",
       "HG-002_kitchen_03.jpg",
     ]);
+    // Both survivors in one message, with the refusal explained.
+    expect(slack.posts).toHaveLength(1);
+    expect(JSON.stringify(slack.posts[0]!.blocks)).toContain("content filter");
   });
 });

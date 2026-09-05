@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { addBatchRows, createBatch, setBatchState } from "../db/repository.js";
 import { createTestDb, type TestDb } from "../db/testing.js";
-import { createFakeSlack, type FakeSlack } from "../slack/testing.js";
+import {
+  allImageFilenames,
+  createFakeSlack,
+  type FakeSlack,
+} from "../slack/testing.js";
 import { createMemoryStore, type MemoryStore } from "../storage/memory.js";
 import type { ImageGenerator } from "./generator.js";
 import { tick } from "./loop.js";
@@ -41,6 +45,7 @@ function deps(gen: ImageGenerator = generator): WorkerDeps {
     channel: "C_REVIEW",
     model: "uni-1-max",
     aspectRatio: "1:1",
+    publicBaseUrl: "https://shots.test",
     fetch: fetchOk,
     sleep: async () => {},
   };
@@ -78,7 +83,7 @@ describe("tick", () => {
 
     await tick(deps(), { approverUserId: "U_ELLIE" });
 
-    expect(slack.uploads).toHaveLength(3);
+    expect(allImageFilenames(slack.posts)).toHaveLength(3);
     const announcements = slack.posts.filter((p) => p.text.includes(`#${batch.id}`));
     expect(announcements).toHaveLength(1);
     expect(announcements[0]!.text).toContain("<@U_ELLIE>");
@@ -117,14 +122,14 @@ describe("tick", () => {
       poll: async () => ({ state: "pending" }),
     };
     await tick(deps(stalls), { maxStepsPerTick: 8 });
-    expect(slack.uploads).toHaveLength(0);
+    expect(allImageFilenames(slack.posts)).toHaveLength(0);
 
     const { rows } = await db.query<{ state: string }>(`select state from image_jobs`);
     expect(rows.every((r) => r.state === "submitted")).toBe(true);
 
     // A fresh process, with the generations now complete.
     await tick(deps(), { approverUserId: "U_ELLIE" });
-    expect(slack.uploads).toHaveLength(3);
+    expect(allImageFilenames(slack.posts)).toHaveLength(3);
   });
 
   it("announces a batch even when every image failed", async () => {
