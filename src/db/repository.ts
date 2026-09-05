@@ -584,13 +584,21 @@ export async function getProductImages(
     failure_code: string | null;
     product_name: string;
     shot_idea: string | null;
+    decision: string | null;
   }>(
     `select i.id as image_id, i.slot, i.filename, i.prompt, i.kind,
             i.object_key, j.state, j.failure_code,
-            i.product_name, r.shot_idea
+            i.product_name, r.shot_idea,
+            case
+              when a.image_id is not null then 'approved'
+              when d.image_id is not null then 'discarded'
+              else null
+            end as decision
        from images i
-       join image_jobs j on j.image_id = i.id
-       join batch_rows r on r.batch_id = i.batch_id and r.sku = i.sku
+       join image_jobs j            on j.image_id = i.id
+       join batch_rows r            on r.batch_id = i.batch_id and r.sku = i.sku
+       left join approved_images a  on a.image_id = i.id
+       left join discarded_images d on d.image_id = i.id
       where i.batch_id = $1 and i.sku = $2
       order by i.slot asc`,
     [batchId, sku],
@@ -608,6 +616,7 @@ export async function getProductImages(
       objectKey: r.object_key,
       jobState: r.state,
       failureCode: r.failure_code,
+      decision: (r.decision as "approved" | "discarded" | null) ?? null,
     })),
   };
 }
@@ -691,6 +700,8 @@ export async function setProductMessageTs(
   );
 }
 
+export type { ProductSummary as ProductView };
+
 export interface ProductSummary {
   sku: string;
   productName: string;
@@ -768,4 +779,161 @@ export async function getBatchProducts(
   }
 
   return [...products.values()];
+}
+
+export interface ImageLocation {
+  imageId: string;
+  batchId: number;
+  sku: string;
+  filename: string;
+  /** The candidate's own message, inside the product's thread. */
+  messageTs: string | null;
+  /** The product's line in the channel. */
+  productMessageTs: string | null;
+}
+
+/** Where an image is, so its decision can be reflected back into Slack. */
+export async function getImageLocation(
+  db: SqlClient,
+  imageId: string,
+): Promise<ImageLocation | null> {
+  const { rows } = await db.query<{
+    image_id: string;
+    batch_id: string;
+    sku: string;
+    filename: string;
+    message_ts: string | null;
+    product_message_ts: string | null;
+  }>(
+    `select i.id as image_id, i.batch_id, i.sku, i.filename, i.message_ts,
+            r.message_ts as product_message_ts
+       from images i
+       join batch_rows r on r.batch_id = i.batch_id and r.sku = i.sku
+      where i.id = $1`,
+    [imageId],
+  );
+
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    imageId: row.image_id,
+    batchId: Number(row.batch_id),
+    sku: row.sku,
+    filename: row.filename,
+    messageTs: row.message_ts,
+    productMessageTs: row.product_message_ts,
+  };
+}
+
+/** True once a batch has been confirmed, after which it is frozen. */
+export async function isBatchFrozen(
+  db: SqlClient,
+  batchId: number,
+): Promise<boolean> {
+  const { rows } = await db.query<{ state: string }>(
+    `select state from batches where id = $1`,
+    [batchId],
+  );
+  return rows[0]?.state === "delivered";
+}
+
+export async function getBatchState(db: SqlClient, batchId: number): Promise<string> {
+  const { rows } = await db.query<{ state: string }>(
+    `select state from batches where id = $1`,
+    [batchId],
+  );
+  return rows[0]?.state ?? "uploaded";
+}
+
+export interface ApprovedImage {
+  imageId: string;
+  sku: string;
+  filename: string;
+  objectKey: string;
+  checksum: string | null;
+}
+
+/**
+ * The approved images of one batch, in catalog order.
+ *
+ * Membership is the filter, so a discarded image cannot appear here by any
+ * route — which is the property that keeps the wrong file out of the export.
+ */
+export async function getApprovedImages(
+  db: SqlClient,
+  batchId: number,
+): Promise<ApprovedImage[]> {
+  const { rows } = await db.query<{
+    image_id: string;
+    sku: string;
+    filename: string;
+    object_key: string | null;
+    checksum: string | null;
+  }>(
+    `select i.id as image_id, i.sku, i.filename, i.object_key, i.checksum
+       from approved_images a
+       join images i     on i.id = a.image_id
+       join batch_rows r on r.batch_id = i.batch_id and r.sku = i.sku
+      where a.batch_id = $1 and i.object_key is not null
+      order by r.row_index asc, i.slot asc`,
+    [batchId],
+  );
+
+  return rows.map((r) => ({
+    imageId: r.image_id,
+    sku: r.sku,
+    filename: r.filename,
+    objectKey: r.object_key!,
+    checksum: r.checksum,
+  }));
+}
+
+/**
+ * Counts over the images that can actually be decided.
+ *
+ * An image whose generation failed is never posted with buttons, so it can
+ * never enter either relation. Counting it as outstanding leaves a batch
+ * permanently unconfirmable — and makes this disagree with `/luma status`,
+ * which has always excluded failures.
+ */
+export async function batchDecisionCounts(
+  db: SqlClient,
+  batchId: number,
+): Promise<{ decidable: number; approved: number; discarded: number; pending: number }> {
+  const { rows } = await db.query<{
+    decidable: string;
+    approved: string;
+    discarded: string;
+  }>(
+    `select
+       (select count(*) from image_jobs      where batch_id = $1 and state <> 'failed') as decidable,
+       (select count(*) from approved_images where batch_id = $1) as approved,
+       (select count(*) from discarded_images where batch_id = $1) as discarded`,
+    [batchId],
+  );
+
+  const row = rows[0]!;
+  const decidable = Number(row.decidable);
+  const approved = Number(row.approved);
+  const discarded = Number(row.discarded);
+  return { decidable, approved, discarded, pending: decidable - approved - discarded };
+}
+
+/**
+ * Moves a batch's state only if it is where we expect.
+ *
+ * Returns false when it was not, which makes a read-then-write pair safe
+ * against two deferred tasks arriving together.
+ */
+export async function transitionBatchState(
+  db: SqlClient,
+  batchId: number,
+  from: string,
+  to: string,
+): Promise<boolean> {
+  const { rows } = await db.query<{ id: string }>(
+    `update batches set state = $3 where id = $1 and state = $2 returning id`,
+    [batchId, from, to],
+  );
+  return rows.length > 0;
 }

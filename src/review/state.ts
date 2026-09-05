@@ -89,7 +89,10 @@ export async function buildReviewState(
       if (state === "failed") failed += 1;
       else if (state === "generating") generating += 1;
       else ready += 1;
-      if (image.kind === "styled") generated += 1;
+      // Billed once submitted, not once the row exists.
+      if (image.kind === "styled" && image.jobState !== "pending_submit") {
+        generated += 1;
+      }
 
       return {
         filename: image.filename,

@@ -176,7 +176,7 @@ export async function runOnce(
           if (image.jobState !== "stored" || !image.objectKey) continue;
 
           const { bytes } = await deps.store.get(image.objectKey);
-          const { ts } = await deps.slack.uploadImage({
+          const { ts } = await deps.slack.uploadFile({
             channel: deps.channel,
             threadTs,
             filename: image.filename,

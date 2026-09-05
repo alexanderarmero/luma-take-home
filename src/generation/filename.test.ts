@@ -86,3 +86,30 @@ describe("buildFilename", () => {
     expect(name).toMatch(/^[A-Za-z0-9._-]+$/);
   });
 });
+
+describe("a SKU straight out of a spreadsheet", () => {
+  it("cannot escape a zip when it contains path segments", () => {
+    // The SKU is copied verbatim from an uploaded CSV and this string becomes
+    // a zip entry name.
+    const name = buildFilename({ sku: "../../etc/passwd", slot: 1, shotIdea: null });
+    expect(name).not.toContain("..");
+    expect(name).not.toContain("/");
+  });
+
+  it("strips anything a filename should not carry", () => {
+    const name = buildFilename({ sku: 'HG "002"', slot: 1, shotIdea: "kitchen" });
+    expect(name).toMatch(/^[A-Za-z0-9._-]+$/);
+  });
+
+  it("leaves an ordinary SKU untouched", () => {
+    expect(buildFilename({ sku: "HG-002", slot: 1, shotIdea: null })).toBe(
+      "HG-002_original.jpg",
+    );
+  });
+
+  it("falls back rather than producing a nameless file", () => {
+    expect(buildFilename({ sku: "...", slot: 1, shotIdea: null })).toBe(
+      "SKU_original.jpg",
+    );
+  });
+});

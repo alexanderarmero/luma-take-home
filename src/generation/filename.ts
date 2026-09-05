@@ -61,7 +61,18 @@ export interface FilenameInput {
  * is the mechanism behind the incident this product exists to prevent.
  */
 export function buildFilename({ sku, slot, shotIdea }: FilenameInput): string {
-  if (shotIdea === null) return `${sku}_original.jpg`;
+  const safe = safeSku(sku);
+  if (shotIdea === null) return `${safe}_original.jpg`;
   const slot2 = String(slot).padStart(2, "0");
-  return `${sku}_${slugifyShotIdea(shotIdea)}_${slot2}.jpg`;
+  return `${safe}_${slugifyShotIdea(shotIdea)}_${slot2}.jpg`;
+}
+
+/**
+ * The SKU is copied verbatim out of an uploaded spreadsheet, and this string
+ * becomes a zip entry name. A SKU of `../../x` would otherwise produce an entry
+ * that escapes the extraction directory on many extractors.
+ */
+function safeSku(sku: string): string {
+  const cleaned = sku.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[.-]+|[.-]+$/g, "");
+  return cleaned || "SKU";
 }

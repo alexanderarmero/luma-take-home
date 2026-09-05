@@ -105,7 +105,7 @@ export async function runVerificationProbes(
     }
     const bytes = Buffer.from(await response.arrayBuffer());
 
-    await slack.uploadImage({
+    await slack.uploadFile({
       channel: input.channel,
       filename: "HG-002_probe_01.jpg",
       title: "HG-002_probe_01.jpg",
@@ -140,7 +140,7 @@ export async function runVerificationProbes(
   const photo2 = await fetchBytes(doFetch, SAMPLE_PHOTO_2, "probe4_b.jpg");
 
   const upload = async (bytes: Buffer, filename: string) => {
-    const { fileId } = await slack.uploadImage({ filename, title: filename, bytes });
+    const { fileId } = await slack.uploadFile({ filename, title: filename, bytes });
     return fileId;
   };
 

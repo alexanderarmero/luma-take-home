@@ -19,6 +19,14 @@ import { describeWait } from "../generation/estimate.js";
 import { startGeneration } from "../generation/start.js";
 import type { ImageModel } from "../pricing.js";
 import { buildStatusSummary } from "../status/status.js";
+import { confirmBatch, CONFIRM_ACTION_ID } from "../decisions/confirm.js";
+import { decide } from "../decisions/decide.js";
+import { buildApprovedCatalog } from "../export/catalog.js";
+import { buildLatestExport } from "../export/zip.js";
+import {
+  APPROVE_ACTION_ID,
+  DISCARD_ACTION_ID,
+} from "../generation/message.js";
 import { renderReviewPage } from "../review/page.js";
 import { buildReviewState } from "../review/state.js";
 import type { ObjectStore } from "../storage/store.js";
@@ -60,6 +68,7 @@ const USAGE = [
   "• `/luma ping` — check I'm awake",
   "• `/luma upload` — drop in a catalog CSV",
   "• `/luma status` — where the latest batch stands",
+  "• `/luma export` — download the approved photos of the latest confirmed batch",
   "• `/luma verify` — post the platform-verification probes",
 ].join("\n");
 
@@ -110,7 +119,14 @@ export function createApp(deps: AppDeps) {
       case "status":
         try {
           return c.json(
-            ephemeral(await buildStatusSummary(deps.db, deps.publicBaseUrl)),
+            ephemeral(
+              await buildStatusSummary({
+                db: deps.db,
+                ...(deps.slack ? { slack: deps.slack } : {}),
+                ...(deps.reviewChannelId ? { channel: deps.reviewChannelId } : {}),
+                ...(deps.publicBaseUrl ? { publicBaseUrl: deps.publicBaseUrl } : {}),
+              }),
+            ),
           );
         } catch (error) {
           // Slack renders an unhandled error as a bare "dispatch_failed",
@@ -136,6 +152,54 @@ export function createApp(deps: AppDeps) {
           console.error("[/luma upload] could not open modal", error);
           return c.json(ephemeral("I couldn't open the upload window — try again."));
         }
+      }
+
+      case "export": {
+        const { slack, store, reviewChannelId } = deps;
+        if (!slack || !store || !reviewChannelId) {
+          return c.json(ephemeral("Export isn't configured on this instance."));
+        }
+        // Fetching every approved image and zipping it is far too slow for the
+        // acknowledgement window.
+        deps.defer(async () => {
+          try {
+            const result = await buildLatestExport(deps.db, store);
+            if (!result.ok) {
+              await slack.postMessage({ channel: reviewChannelId, text: result.reason });
+              return;
+            }
+            await slack.uploadFile({
+            channel: reviewChannelId,
+            filename: result.filename,
+            title: result.filename,
+            bytes: result.bytes,
+            blocks: [
+              {
+                type: "section",
+                text: {
+                  type: "mrkdwn",
+                  text:
+                    `*Batch #${result.batchId} — ${result.count} approved ` +
+                    `${result.count === 1 ? "photo" : "photos"}.*\nEvery file is named ` +
+                    "for its product and shot idea. MANIFEST.txt lists them with " +
+                      "their checksums.",
+                  },
+                },
+              ],
+            });
+          } catch (error) {
+            // Silence here leaves the reviewer waiting for a zip that is never
+            // coming, with nothing to act on.
+            console.error("[/luma export] failed", error);
+            await slack.postMessage({
+              channel: reviewChannelId,
+              text:
+                "I couldn't build the export just now — the photos are all still " +
+                "stored, so try `/luma export` again in a moment.",
+            });
+          }
+        });
+        return c.json(ephemeral("Putting the zip together…"));
       }
 
       case "verify": {
@@ -269,6 +333,96 @@ export function createApp(deps: AppDeps) {
     const ts = payload.message?.ts;
     const userId = payload.user?.id;
 
+    if (action?.action_id === CONFIRM_ACTION_ID && deps.slack && deps.reviewChannelId) {
+      const { slack, reviewChannelId, approverUserId } = deps;
+      const batchId = Number(action.value);
+      const responseUrl = payload.response_url;
+
+      deps.defer(async () => {
+        // Fail closed: two missing values must not compare equal and let an
+        // unidentified click through the only authorisation in this path.
+        const outcome =
+          userId && approverUserId
+            ? await confirmBatch({
+                db: deps.db,
+                batchId,
+                actorUserId: userId,
+                approverUserId,
+              })
+            : ({ ok: false, reason: "I can't tell who you are." } as const);
+
+        if (!outcome.ok) {
+          if (responseUrl) await slack.respondEphemeral(responseUrl, outcome.reason);
+          return;
+        }
+
+        await slack.postMessage({
+          channel: reviewChannelId,
+          text:
+            `*Batch #${outcome.batchId} is confirmed.* ${outcome.approved} ` +
+            `${outcome.approved === 1 ? "photo is" : "photos are"} ready to publish — ` +
+            "run `/luma export` to download them.",
+        });
+
+        // The one artefact that writes back to the spreadsheet the team lives
+        // in: which requests are actually done.
+        if (deps.publicBaseUrl) {
+          const csv = await buildApprovedCatalog(
+            deps.db,
+            outcome.batchId,
+            deps.publicBaseUrl,
+          );
+          await slack.uploadFile({
+            channel: reviewChannelId,
+            filename: csv.filename,
+            title: csv.filename,
+            bytes: Buffer.from(csv.content, "utf8"),
+          });
+        }
+      });
+
+      return c.body(null, 200);
+    }
+
+    const isDecision =
+      action?.action_id === APPROVE_ACTION_ID ||
+      action?.action_id === DISCARD_ACTION_ID;
+
+    if (isDecision && deps.slack && deps.reviewChannelId && action.value) {
+      const { slack, reviewChannelId, approverUserId } = deps;
+      const imageId = action.value;
+      const decision =
+        action.action_id === APPROVE_ACTION_ID ? "approve" : "discard";
+      const responseUrl = payload.response_url;
+
+      // Recording and redrawing both take longer than the acknowledgement
+      // window allows, so the click is answered first and the work follows.
+      deps.defer(async () => {
+        // Fail closed, as above.
+        const outcome =
+          userId && approverUserId
+            ? await decide({
+                db: deps.db,
+                slack,
+                channel: reviewChannelId,
+                imageId,
+                decision,
+                actorUserId: userId,
+                approverUserId,
+                log: (message) => console.log(message),
+              })
+            : ({ ok: false, reason: "I can't tell who you are." } as const);
+
+        // A refusal is told only to the person who clicked. Announcing it to
+        // the channel would be a public correction of a private mistake.
+        if (!outcome.ok && responseUrl) {
+          await slack.respondEphemeral(responseUrl, outcome.reason);
+        }
+      });
+
+      return c.body(null, 200);
+    }
+
     if (action?.action_id === GENERATE_ACTION_ID && deps.slack && channel) {
       const { slack, generator, store, reviewChannelId } = deps;
       const batchId = Number(action.value);
@@ -354,6 +508,7 @@ interface SlackFile {
 
 interface BlockActionsPayload {
   type?: string;
+  response_url?: string;
   user?: { id?: string };
   channel?: { id?: string };
   message?: { ts?: string };

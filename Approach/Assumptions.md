@@ -691,3 +691,11 @@ cannot show a batch that is still running. A snapshot taken *after* delivery is 
 different thing and might be worth having as a permanent artefact alongside the
 zip — the batch is immutable by then (D22), so there is nothing left to keep
 current. Raised 2026-09-05; not blocking.
+
+**OQ-28 — Can `chat.update` edit a file-share message?** When a decision lands,
+the candidate's own message is rewritten to swap its buttons for its outcome.
+Ticket 02 established that a file-share message can *carry* blocks (F8.2); it
+never established that one can later be *edited*. If Slack refuses, or drops the
+attached photo, the failure is caught and logged and the decision still stands —
+but the thread would keep live buttons on a settled image, or lose the
+photograph. Worth one probe. Raised by code review, 2026-09-05.

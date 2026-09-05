@@ -16,7 +16,7 @@ export interface UpdateMessageInput {
   blocks?: Block[];
 }
 
-export interface UploadImageInput {
+export interface UploadFileInput {
   /** Omit to upload without sharing: the file is hosted but stays private. */
   channel?: string;
   filename: string;
@@ -35,8 +35,21 @@ export interface UploadImageInput {
 export interface SlackClient {
   postMessage(input: PostMessageInput): Promise<{ ts: string }>;
   updateMessage(input: UpdateMessageInput): Promise<void>;
-  uploadImage(input: UploadImageInput): Promise<{ fileId: string; ts?: string }>;
+  uploadFile(input: UploadFileInput): Promise<{ fileId: string; ts?: string }>;
   openView(input: { triggerId: string; view: Record<string, unknown> }): Promise<void>;
+  /**
+   * Answers an interaction privately, to the person who clicked only.
+   *
+   * `response_url` is how Slack lets an app reply to a button press without
+   * posting into the channel — which matters for telling someone their action
+   * was refused without announcing it to everyone.
+   */
+  respondEphemeral(responseUrl: string, text: string): Promise<void>;
+  /**
+   * A stable link to a message, so a listing can be tapped rather than
+   * scrolled to.
+   */
+  getPermalink(channel: string, messageTs: string): Promise<string | undefined>;
   /** Fetches a file Slack is hosting privately. Returns its text. */
   downloadFile(urlPrivate: string): Promise<string>;
   /**
@@ -141,7 +154,7 @@ export function createSlackClient(options: SlackClientOptions): SlackClient {
      * — Slack ignores blocks outright when a comment is present, which would
      * silently drop the buttons the message exists to carry.
      */
-    async uploadImage({ channel, filename, title, bytes, blocks, threadTs }) {
+    async uploadFile({ channel, filename, title, bytes, blocks, threadTs }) {
       const reserved = await callForm(
         "files.getUploadURLExternal",
         new URLSearchParams({
@@ -178,6 +191,27 @@ export function createSlackClient(options: SlackClientOptions): SlackClient {
       // a missing ts is recoverable, a crash here is not.
       const ts = channel ? extractShareTs(completed, channel) : undefined;
       return ts === undefined ? { fileId } : { fileId, ts };
+    },
+
+    async getPermalink(channel, messageTs) {
+      const body = await callForm(
+        "chat.getPermalink",
+        new URLSearchParams({ channel, message_ts: messageTs }),
+      );
+      return (body.permalink as string | undefined) ?? undefined;
+    },
+
+    async respondEphemeral(responseUrl, text) {
+      // response_url is a plain webhook, not a Slack API method: it answers
+      // with a bare "ok" body rather than the usual {ok: true} envelope.
+      const response = await doFetch(responseUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ response_type: "ephemeral", text }),
+      });
+      if (!response.ok) {
+        throw new Error(`Slack response_url failed: HTTP ${response.status}`);
+      }
     },
 
     async getFileUrl(fileId) {

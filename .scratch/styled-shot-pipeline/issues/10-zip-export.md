@@ -9,12 +9,12 @@ with no naming convention, the wrong file that shipped for three weeks — is un
 
 **Blocked by:** 09
 
-**Status:** ready-for-agent
+**Status:** done (2026-09-05)
 
-- [ ] A command returns the approved images of the latest delivered batch as a zip
-- [ ] Every file in the zip carries its deterministic name, identical to the name shown on its Slack message
-- [ ] The zip contains exactly the approved set — no discarded image is reachable through this or any other retrieval path
-- [ ] Retrieval reads through the delivered pointer, so a batch that is uploaded, generated, or fully reviewed but unconfirmed cannot be pulled
-- [ ] Running the command while a newer batch is mid-review returns the previous delivered batch, not the batch in progress
-- [ ] The file delivered is byte-identical to the file that was approved — same checksum as the stored object and the bytes shown in Slack
-- [ ] Anyone in the channel can run it without depending on the reviewer
+- [x] A command returns the approved images of the latest delivered batch as a zip
+- [x] Every file in the zip carries its deterministic name, identical to the name shown on its Slack message
+- [x] The zip contains exactly the approved set — no discarded image is reachable through this or any other retrieval path
+- [x] Retrieval reads through the delivered pointer, so a batch that is uploaded, generated, or fully reviewed but unconfirmed cannot be pulled
+- [x] Running the command while a newer batch is mid-review returns the previous delivered batch, not the batch in progress
+- [x] The file delivered is byte-identical to the file that was approved — same checksum as the stored object and the bytes shown in Slack
+- [x] Anyone in the channel can run it without depending on the reviewer

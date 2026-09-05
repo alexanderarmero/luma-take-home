@@ -69,7 +69,10 @@ const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
         aspectRatio: "1:1",
         log: (message) => console.log(message),
       },
-      { approverUserId: config.slack.approverUserId },
+      {
+        approverUserId: config.slack.approverUserId,
+        publicBaseUrl: config.publicBaseUrl,
+      },
     );
     console.log("[worker] loop started");
   });
