@@ -6,6 +6,10 @@ const SAMPLE_PHOTO =
 
 export const VERIFY_ACTION_ID = "verify_button";
 
+/** A second catalog photo, so probe 4 can show two images in one message. */
+const SAMPLE_PHOTO_2 =
+  "https://take-home-service.lumalabs-ext.workers.dev/assets/fde/hg-005.jpg";
+
 function probeButtons(label: string): Block[] {
   return [
     {
@@ -126,7 +130,80 @@ export async function runVerificationProbes(
     failures.push(`3 · file upload — ${(error as Error).message}`);
   }
 
+  // F8.6 — can several images live in ONE message, each with its own buttons?
+  // This is the shape the batched review needs: three candidates for a product
+  // in a single post rather than three posts. It hinges on whether an image
+  // block can reference a Slack-hosted file, and the docs do not say whether a
+  // file that was never shared to a channel can be referenced by id.
+  //
+  // Both documented forms are tried in the same message, so one look tells us
+  // which works: the first image by `id`, the second by `url`.
+  try {
+    const [first, second] = await Promise.all([
+      uploadPrivately(slack, doFetch, SAMPLE_PHOTO, "HG-002_probe_a.jpg"),
+      uploadPrivately(slack, doFetch, SAMPLE_PHOTO_2, "HG-005_probe_b.jpg"),
+    ]);
+
+    const blocks: Block[] = [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text:
+            "*Probe 4 · several images in one message*\n" +
+            "This is the shape a batched review would take. Two things to look " +
+            "for: do *both* images appear, and does each button sit under its " +
+            "own image?",
+        },
+      },
+      {
+        type: "image",
+        alt_text: "First probe image, referenced by file id",
+        title: { type: "plain_text", text: "By file id" },
+        slack_file: { id: first.fileId },
+      },
+      ...probeButtons("probe-4-by-id"),
+      {
+        type: "image",
+        alt_text: "Second probe image, referenced by private url",
+        title: { type: "plain_text", text: "By private url" },
+        slack_file: { url: second.urlPrivate },
+      },
+      ...probeButtons("probe-4-by-url"),
+    ];
+
+    await slack.postMessage({
+      channel: input.channel,
+      text: "Probe 4 of 4 — several images in one message.",
+      blocks,
+    });
+    posted.push("4 · two images in one message (one by id, one by url)");
+  } catch (error) {
+    failures.push(`4 · images in one message — ${(error as Error).message}`);
+  }
+
   return { posted, failures };
+}
+
+/** Uploads to Slack without sharing it anywhere, returning both references. */
+async function uploadPrivately(
+  slack: SlackClient,
+  doFetch: typeof fetch,
+  photoUrl: string,
+  filename: string,
+): Promise<{ fileId: string; urlPrivate?: string }> {
+  const response = await doFetch(photoUrl);
+  if (!response.ok) {
+    throw new Error(`could not fetch ${filename}: HTTP ${response.status}`);
+  }
+  const bytes = Buffer.from(await response.arrayBuffer());
+
+  const { fileId, urlPrivate } = await slack.uploadImage({
+    filename,
+    title: filename,
+    bytes,
+  });
+  return { fileId, ...(urlPrivate === undefined ? {} : { urlPrivate }) };
 }
 
 export function summariseReport(report: VerifyReport): string {
@@ -138,6 +215,9 @@ export function summariseReport(report: VerifyReport): string {
     "Now go and look at the channel. What you're checking:",
     "• Probes 1 and 3: do the buttons appear, and does tapping one change the message?",
     "• Probe 2: mute the channel, re-run, and see whether the mention still badges.",
+    "• Probe 4: do *both* images show, and is each button under its own image? " +
+      "If only one image renders, note which — it decides how the batched " +
+      "review references its files.",
   );
   return lines.join("\n");
 }
