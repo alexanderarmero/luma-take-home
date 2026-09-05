@@ -8,8 +8,6 @@ import {
 } from "../db/repository.js";
 import type { Block, SlackClient } from "../slack/client.js";
 
-export const CONFIRM_ACTION_ID = "confirm_batch";
-
 /**
  * Posted the moment a batch is fully decided.
  *
@@ -18,9 +16,16 @@ export const CONFIRM_ACTION_ID = "confirm_batch";
  * they passed an hour ago is one they will not go back for. It also cannot be
  * pressed early, because it does not exist until it applies.
  */
+/**
+ * The nudge, not the control.
+ *
+ * Confirming freezes a batch and hands it over, so it belongs where the whole
+ * set is visible at once rather than behind a button in a channel.
+ */
 function confirmBlocks(
   batchId: number,
   counts: { approved: number; discarded: number },
+  reviewUrl?: string,
 ): Block[] {
   return [
     {
@@ -29,7 +34,10 @@ function confirmBlocks(
         type: "mrkdwn",
         text:
           `*Batch #${batchId} — everything has been decided.*\n` +
-          `*${counts.approved}* approved, *${counts.discarded}* discarded.`,
+          `*${counts.approved}* approved, *${counts.discarded}* discarded.` +
+          (reviewUrl
+            ? `\n\n<${reviewUrl}|Open the overview page> to look them over and confirm.`
+            : ""),
       },
     },
     {
@@ -40,18 +48,6 @@ function confirmBlocks(
           text:
             ":warning: Confirming hands these to the web person and freezes the " +
             "batch. Decisions can't be changed afterwards.",
-        },
-      ],
-    },
-    {
-      type: "actions",
-      elements: [
-        {
-          type: "button",
-          action_id: CONFIRM_ACTION_ID,
-          text: { type: "plain_text", text: "Confirm and hand over", emoji: true },
-          style: "primary",
-          value: String(batchId),
         },
       ],
     },
@@ -73,8 +69,9 @@ export async function offerConfirmationIfComplete(input: {
   batchId: number;
   batchState: string;
   approverUserId?: string;
+  reviewUrl?: string;
 }): Promise<boolean> {
-  const { db, slack, channel, batchId, batchState, approverUserId } = input;
+  const { db, slack, channel, batchId, batchState, approverUserId, reviewUrl } = input;
 
   if (batchState !== "ready_for_review") return false;
 
@@ -92,7 +89,7 @@ export async function offerConfirmationIfComplete(input: {
     await slack.postMessage({
       channel,
       text: `Batch #${batchId} is fully decided and ready to confirm.`,
-      blocks: confirmBlocks(batchId, counts),
+      blocks: confirmBlocks(batchId, counts, reviewUrl),
     });
   } catch (error) {
     // Put the state back, or the batch is left with no button and no way to
@@ -118,14 +115,8 @@ export type ConfirmOutcome =
 export async function confirmBatch(input: {
   db: SqlClient;
   batchId: number;
-  actorUserId: string;
-  approverUserId: string;
 }): Promise<ConfirmOutcome> {
-  const { db, batchId, actorUserId, approverUserId } = input;
-
-  if (actorUserId !== approverUserId) {
-    return { ok: false, reason: "Only Ellie can confirm a batch." };
-  }
+  const { db, batchId } = input;
 
   // Guarded on the batch's own state, not on where the pointer happens to be.
   // A confirm message stays in the channel with a live button, and clicking an

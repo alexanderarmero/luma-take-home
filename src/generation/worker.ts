@@ -1,6 +1,7 @@
 import type { SqlClient } from "../db/client.js";
 import {
   claimNextJob,
+  ensureReviewToken,
   getProductImages,
   markImagePosted,
   markImageStored,
@@ -18,8 +19,6 @@ import {
   buildProductChannelMessage,
 } from "./message.js";
 
-export { APPROVE_ACTION_ID, DISCARD_ACTION_ID } from "./message.js";
-
 /** Beyond this a job is failing for a reason retrying will not fix. */
 const MAX_ATTEMPTS = 4;
 
@@ -31,6 +30,8 @@ export interface WorkerDeps {
   channel: string;
   model: ImageModel;
   aspectRatio: string;
+  /** Absolute base for the review links written into Slack. */
+  publicBaseUrl?: string;
   fetch?: typeof fetch;
   log?: (message: string) => void;
   /** Injected so the poll loop can be driven without real time in tests. */
@@ -155,11 +156,17 @@ export async function runOnce(
         // and the photographs in its thread.
         const product = await getProductImages(deps.db, job.batchId, job.sku);
 
+        const reviewToken = await ensureReviewToken(deps.db, job.batchId);
         const channelMessage = buildProductChannelMessage({
           sku: job.sku,
           productName: product.productName,
           shotIdea: product.shotIdea,
           images: product.images,
+          ...(deps.publicBaseUrl
+            ? {
+                reviewUrl: `${deps.publicBaseUrl}/review/${reviewToken}#p-${job.sku}`,
+              }
+            : {}),
         });
 
         const { ts: threadTs } = await deps.slack.postMessage({
@@ -167,7 +174,17 @@ export async function runOnce(
           text: channelMessage.text,
           blocks: channelMessage.blocks,
         });
-        await setProductMessageTs(deps.db, job.batchId, job.sku, threadTs);
+
+        // Captured now rather than at render time: the overview links straight
+        // into this product's conversation, and doing it here costs one call
+        // per product instead of one per page view.
+        let permalink: string | undefined;
+        try {
+          permalink = await deps.slack.getPermalink(deps.channel, threadTs);
+        } catch {
+          // A missing link costs a button on the page, not the batch.
+        }
+        await setProductMessageTs(deps.db, job.batchId, job.sku, threadTs, permalink);
 
         // Each candidate is its own file share inside that thread: the bytes
         // live in Slack, so the record survives our storage, and a decision

@@ -8,28 +8,22 @@ import {
   setBatchState,
 } from "../db/repository.js";
 import { createTestDb, type TestDb } from "../db/testing.js";
-import { APPROVE_ACTION_ID, DISCARD_ACTION_ID } from "../generation/message.js";
 import { startGeneration } from "../generation/start.js";
 import { drain } from "../generation/worker.js";
-import { createApp } from "../slack/app.js";
 import { createFakeSlack, type FakeSlack } from "../slack/testing.js";
 import { createMemoryStore, type MemoryStore } from "../storage/memory.js";
 import { decide } from "./decide.js";
 
-const SECRET = "test-signing-secret";
-const NOW = 1_700_000_000_000;
 const ELLIE = "U_ELLIE";
 
 let db: TestDb;
 let slack: FakeSlack;
 let store: MemoryStore;
-let deferred: Array<() => Promise<void>>;
 
 beforeEach(async () => {
   db = await createTestDb();
   slack = createFakeSlack();
   store = createMemoryStore();
-  deferred = [];
 });
 afterEach(async () => {
   await db?.close();
@@ -189,8 +183,7 @@ describe("reflecting the decision back into Slack", () => {
     expect(JSON.stringify(productLine!.blocks)).toContain("1 of 3 decided");
   });
 
-  it("replaces the candidate's buttons with its outcome", async () => {
-    // Leaving the buttons would make a settled image look undecided.
+  it("marks the candidate's outcome in the thread", async () => {
     const { imageIds } = await readyBatch();
     await decideWith(imageIds[0]!, "approve");
 
@@ -198,6 +191,7 @@ describe("reflecting the decision back into Slack", () => {
     expect(candidate).toBeDefined();
     const blocks = JSON.stringify(candidate!.blocks);
     expect(blocks).toContain("Approved");
+    // Deciding happens on the page; the thread is for talking about a shot.
     expect(blocks).not.toContain("approve_image");
   });
 
@@ -212,107 +206,5 @@ describe("reflecting the decision back into Slack", () => {
     const outcome = await decideWith(imageIds[0]!, "approve");
     expect(outcome.ok).toBe(true);
     expect(await batchCounts(db, batch.id)).toMatchObject({ approved: 1 });
-  });
-});
-
-describe("through the interactions endpoint", () => {
-  function app() {
-    return createApp({
-      signingSecret: SECRET,
-      now: () => NOW,
-      defer: (task) => {
-        deferred.push(task);
-      },
-      db,
-      slack,
-      store,
-      reviewChannelId: "C_REVIEW",
-      approverUserId: ELLIE,
-    });
-  }
-
-  async function click(actionId: string, imageId: string, user = ELLIE) {
-    const payload = {
-      type: "block_actions",
-      user: { id: user },
-      channel: { id: "C_REVIEW" },
-      message: { ts: "1700000000.000100" },
-      response_url: "https://hooks.slack.com/actions/abc",
-      actions: [{ action_id: actionId, value: imageId }],
-    };
-    const body = `payload=${encodeURIComponent(JSON.stringify(payload))}`;
-    const ts = Math.floor(NOW / 1000);
-    const digest = createHmac("sha256", SECRET).update(`v0:${ts}:${body}`).digest("hex");
-
-    const res = await app().request(
-      new Request("http://localhost/slack/interactions", {
-        method: "POST",
-        headers: {
-          "content-type": "application/x-www-form-urlencoded",
-          "x-slack-request-timestamp": String(ts),
-          "x-slack-signature": `v0=${digest}`,
-        },
-        body,
-      }),
-    );
-    for (const task of deferred) await task();
-    deferred = [];
-    return res;
-  }
-
-  it("acknowledges the click before doing the work", async () => {
-    const { imageIds } = await readyBatch();
-    const payload = {
-      type: "block_actions",
-      user: { id: ELLIE },
-      channel: { id: "C_REVIEW" },
-      actions: [{ action_id: APPROVE_ACTION_ID, value: imageIds[0]! }],
-    };
-    const body = `payload=${encodeURIComponent(JSON.stringify(payload))}`;
-    const ts = Math.floor(NOW / 1000);
-    const digest = createHmac("sha256", SECRET).update(`v0:${ts}:${body}`).digest("hex");
-
-    const res = await app().request(
-      new Request("http://localhost/slack/interactions", {
-        method: "POST",
-        headers: {
-          "content-type": "application/x-www-form-urlencoded",
-          "x-slack-request-timestamp": String(ts),
-          "x-slack-signature": `v0=${digest}`,
-        },
-        body,
-      }),
-    );
-
-    expect(res.status).toBe(200);
-    expect(deferred).toHaveLength(1);
-  });
-
-  it("approves on the approve button", async () => {
-    const { batch, imageIds } = await readyBatch();
-    await click(APPROVE_ACTION_ID, imageIds[0]!);
-    expect(await batchCounts(db, batch.id)).toMatchObject({ approved: 1 });
-  });
-
-  it("discards on the discard button", async () => {
-    const { batch, imageIds } = await readyBatch();
-    await click(DISCARD_ACTION_ID, imageIds[0]!);
-    expect(await batchCounts(db, batch.id)).toMatchObject({ discarded: 1 });
-  });
-
-  it("tells a refused clicker privately, not in the channel", async () => {
-    const { imageIds } = await readyBatch();
-    await click(APPROVE_ACTION_ID, imageIds[0]!, "U_MAYA");
-
-    expect(slack.ephemerals).toHaveLength(1);
-    expect(slack.ephemerals[0]!.text).toContain("Only Ellie");
-    // Nothing new in the channel: a private mistake stays private.
-    expect(slack.posts).toHaveLength(0);
-  });
-
-  it("says nothing to anyone when the decision succeeds", async () => {
-    const { imageIds } = await readyBatch();
-    await click(APPROVE_ACTION_ID, imageIds[0]!);
-    expect(slack.ephemerals).toHaveLength(0);
   });
 });

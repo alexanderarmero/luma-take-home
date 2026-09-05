@@ -1278,3 +1278,70 @@ job** — the work happens in Slack, and the page is something you glance at out
 of curiosity. A page visited by choice has a different survival rate from one
 visited by obligation. It is also, finally, a direct answer to Maya's stated ask
 (F3.7d) rather than an indirect one.
+
+---
+
+## D41 — Every write moves to the page; Slack keeps none
+
+**Decision.** Approve, discard and confirm are removed from Slack entirely and
+exist only on the overview page. The Slack thread keeps the photographs and
+keeps the conversation; it no longer carries a control.
+
+**Why.** Three reasons, in order of weight.
+
+1. **Deciding needs the whole set in view.** Approving shot 2 of 3 is a
+   comparison, not a verdict. In Slack the three candidates arrive as three
+   file shares in a thread and the comparison happens by scrolling. On the page
+   they sit side by side. The decision being made is "which of these", and the
+   surface should show "these".
+2. **A button in a channel is a button everyone can press.** Slack's block
+   actions carry the presser's user id, so we could check it — and did — but
+   the control was still drawn for every reader, and refusing after the tap is
+   worse than not offering. The page draws controls only for a viewer who may
+   use them (D42).
+3. **Two surfaces for one action is two implementations of one invariant.**
+   Byte-identity (D10.4) and the delivered pointer (D20.1) have to hold no
+   matter which path wrote. One path is one place to get that right.
+
+**Cost.** Deciding now takes a tap into a browser rather than a tap in the
+channel — see T14.
+
+---
+
+## D42 — Write access is a list, checked on every write
+
+**Decision.** `write_access` holds Slack user ids. `SLACK_APPROVER_USER_ID` is
+the bootstrap member and cannot remove itself. `/luma signin` issues a
+single-use magic link (10 minutes) that trades for a 24-hour cookie session.
+Every write endpoint resolves the session and re-checks membership **on that
+request**, not at sign-in.
+
+**Why re-check.** A capability stamped into the session at sign-in outlives a
+revocation by up to a day. Ellie removing someone should take effect on their
+next click, which means the check belongs on the write, not on the login. The
+cost is one indexed lookup per write, against an action that already writes to
+three tables.
+
+**What the two credentials mean.** They answer different questions and are
+deliberately not merged:
+
+| Credential | Question it answers |
+|---|---|
+| Review token, in the URL | *Which batch may you look at?* |
+| Session cookie | *May you act on anything at all?* |
+
+So the link is shareable — anyone in the channel can read the overview — while
+acting stays with the people on the list.
+
+---
+
+## D43 — The handover takes two taps
+
+**Decision.** The confirm control arms on the first tap and sends on the
+second, reverting after five seconds.
+
+**Why.** Confirming freezes the batch and advances the delivered pointer, and
+nothing undoes it. It now sits on the same page as up to 48 approve and
+discard buttons, which is exactly the context in which a mis-tap is likely.
+The deliberate friction of D22 was previously supplied by the action living in
+a different surface; with the surfaces merged, the friction has to be explicit.

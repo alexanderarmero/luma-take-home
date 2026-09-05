@@ -1,11 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { ProductImage } from "../db/repository.js";
 import {
-  APPROVE_ACTION_ID,
   buildCandidateBlocks,
   buildFailureNote,
   buildProductChannelMessage,
-  DISCARD_ACTION_ID,
   explainFailure,
 } from "./message.js";
 
@@ -87,8 +85,21 @@ describe("the product's line in the channel", () => {
     expect(json(blocks)).toContain("1 couldn't be generated");
   });
 
-  it("points the reader at the thread", () => {
-    expect(json(channel([candidate(1)]).blocks)).toContain("open the thread");
+  it("points the reader at the thread and at the page", () => {
+    const { blocks } = buildProductChannelMessage({
+      sku: "HG-002",
+      productName: "Stoneware Mug 12oz",
+      shotIdea: "morning kitchen counter",
+      images: [candidate(1)],
+      reviewUrl: "https://shots.test/review/abc#p-HG-002",
+    });
+    const text = json(blocks);
+    expect(text).toContain("in this thread");
+    expect(text).toContain("https://shots.test/review/abc#p-HG-002");
+  });
+
+  it("omits the page link when the service does not know its own address", () => {
+    expect(json(channel([candidate(1)]).blocks)).not.toContain("Review on the overview");
   });
 
   it("says outright when a photo is the unchanged original", () => {
@@ -106,17 +117,14 @@ describe("the product's line in the channel", () => {
 });
 
 describe("a candidate in the thread", () => {
-  it("offers an approve and a discard carrying that image's own id", () => {
+  it("carries no controls, because deciding happens on the page", () => {
     const blocks = buildCandidateBlocks(candidate(2));
-    const actions = blocks.find((b) => (b as { type: string }).type === "actions");
-    const elements = (actions as { elements: Array<{ action_id: string; value: string }> })
-      .elements;
+    expect(blocks.some((b) => (b as { type: string }).type === "actions")).toBe(false);
+  });
 
-    expect(elements.map((e) => e.action_id)).toEqual([
-      APPROVE_ACTION_ID,
-      DISCARD_ACTION_ID,
-    ]);
-    expect(elements.every((e) => e.value === "image-2")).toBe(true);
+  it("shows its outcome once decided", () => {
+    const blocks = buildCandidateBlocks(candidate(2, { decision: "approved" }));
+    expect(JSON.stringify(blocks)).toContain("Approved");
   });
 
   it("shows the prompt that produced it", () => {

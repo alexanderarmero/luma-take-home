@@ -194,26 +194,42 @@ describe("review page", () => {
     expect(html).toContain("&lt;script&gt;");
   });
 
-  it("says plainly that it cannot be used to decide anything", async () => {
+  it("tells a signed-out reader how to get the ability to decide", async () => {
     const batch = await seed([{ sku: "HG-002", shotIdea: "kitchen" }]);
     const token = await ensureReviewToken(db, batch.id);
     const html = renderReviewPage((await buildReviewState(db, token))!, token);
 
     expect(html).toContain("Read-only");
-    expect(html).toContain("Approve and discard in Slack");
+    expect(html).toContain("/luma signin");
+    // No controls at all for a reader who cannot act.
+    expect(html).not.toContain('class="acts"');
   });
 
-  it("polls only while something is still generating", async () => {
+  it("shows the controls to a signed-in writer", async () => {
+    const batch = await seed([{ sku: "HG-002", shotIdea: "kitchen" }]);
+    const token = await ensureReviewToken(db, batch.id);
+    await runPipeline(batch.id);
+
+    const html = renderReviewPage((await buildReviewState(db, token))!, token, {
+      canWrite: true,
+    });
+    expect(html).toContain('class="acts"');
+    expect(html).toContain("signed in");
+  });
+
+  it("polls fast while generating and slowly once settled", async () => {
+    // It keeps polling either way: while generating, to fill in photographs;
+    // afterwards, because someone else may be deciding at the same time.
     const batch = await seed([{ sku: "HG-002", shotIdea: "kitchen" }]);
     const token = await ensureReviewToken(db, batch.id);
 
     const during = renderReviewPage((await buildReviewState(db, token))!, token);
-    expect(during).toContain("setInterval");
+    expect(during).toContain("setInterval(refresh, 4000)");
     expect(during).toContain("this page updates itself");
 
     await runPipeline(batch.id);
     const after = renderReviewPage((await buildReviewState(db, token))!, token);
-    expect(after).toContain("if (false) setInterval");
+    expect(after).toContain("setInterval(refresh, 15000)");
   });
 
   it("carries no external stylesheet, script or font", async () => {

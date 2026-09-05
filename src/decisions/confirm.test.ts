@@ -86,17 +86,30 @@ describe("offering the handover", () => {
 
     expect(await offer(batch.id, "ready_for_review")).toBe(true);
     expect(slack.posts).toHaveLength(1);
-    expect(JSON.stringify(slack.posts[0]!.blocks)).toContain("confirm_batch");
+    expect(JSON.stringify(slack.posts[0]!.blocks)).toContain("everything has been decided");
   });
 
-  it("says what confirming will do before it is done", async () => {
+  it("says what confirming will do, and points at the page", async () => {
+    // The nudge lives in Slack; the control lives where the whole set is
+    // visible at once.
     const { batch, imageIds } = await reviewableBatch();
     await decideAll(imageIds);
-    await offer(batch.id, "ready_for_review");
+    await offerConfirmationIfComplete({
+      db,
+      slack,
+      channel: "C_REVIEW",
+      batchId: batch.id,
+      batchState: "ready_for_review",
+      approverUserId: ELLIE,
+      reviewUrl: "https://shots.test/review/abc",
+    });
 
     const blocks = JSON.stringify(slack.posts[0]!.blocks);
     expect(blocks).toContain("3* approved");
     expect(blocks).toContain("can't be changed afterwards");
+    expect(blocks).toContain("https://shots.test/review/abc");
+    // No button: confirming happens on the page.
+    expect(blocks).not.toContain("actions");
   });
 
   it("counts a discard as decided, not as unfinished", async () => {
@@ -125,8 +138,7 @@ describe("offering the handover", () => {
 });
 
 describe("confirming", () => {
-  const confirm = (batchId: number, actor = ELLIE) =>
-    confirmBatch({ db, batchId, actorUserId: actor, approverUserId: ELLIE });
+  const confirm = (batchId: number) => confirmBatch({ db, batchId });
 
   it("freezes the batch and makes it the delivered one", async () => {
     const { batch, imageIds } = await reviewableBatch();
@@ -145,14 +157,6 @@ describe("confirming", () => {
     const outcome = await confirm(batch.id);
     if (outcome.ok) throw new Error("expected a refusal");
     expect(outcome.reason).toContain("2 undecided");
-    expect(await getDeliveredBatchId(db)).toBeNull();
-  });
-
-  it("refuses anyone but the approver", async () => {
-    const { batch, imageIds } = await reviewableBatch();
-    await decideAll(imageIds);
-
-    expect(await confirm(batch.id, "U_MAYA")).toMatchObject({ ok: false });
     expect(await getDeliveredBatchId(db)).toBeNull();
   });
 
@@ -177,8 +181,7 @@ describe("confirming", () => {
 });
 
 describe("regressions found in review", () => {
-  const confirm = (batchId: number, actor = ELLIE) =>
-    confirmBatch({ db, batchId, actorUserId: actor, approverUserId: ELLIE });
+  const confirm = (batchId: number) => confirmBatch({ db, batchId });
 
   it("can still be confirmed when a photo failed to generate", async () => {
     // A failed image never gets buttons, so it can never be decided. Counting
