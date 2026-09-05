@@ -11,7 +11,11 @@ export interface FakeSlack extends SlackClient {
   updates: UpdateMessageInput[];
   uploads: UploadFileInput[];
   views: Array<{ triggerId: string; view: Record<string, unknown> }>;
-  viewUpdates: Array<{ viewId: string; view: Record<string, unknown> }>;
+  viewUpdates: Array<{
+    viewId?: string;
+    externalId?: string;
+    view: Record<string, unknown>;
+  }>;
   /** Contents returned by downloadFile, keyed by URL. */
   files: Map<string, string>;
   reset(): void;

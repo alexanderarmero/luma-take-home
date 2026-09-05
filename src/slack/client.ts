@@ -38,7 +38,18 @@ export interface SlackClient {
   uploadFile(input: UploadFileInput): Promise<{ fileId: string; ts?: string }>;
   openView(input: { triggerId: string; view: Record<string, unknown> }): Promise<void>;
   /** Redraws an open modal, so a list reflects a change made inside it. */
-  updateView(input: { viewId: string; view: Record<string, unknown> }): Promise<void>;
+  /**
+   * Redraws an open modal.
+   *
+   * Addressable by `externalId` as well as `viewId`, because a view pushed in
+   * the response to a submission never yields its id to us — we choose the
+   * external id up front and use it to find the view again later.
+   */
+  updateView(input: {
+    viewId?: string;
+    externalId?: string;
+    view: Record<string, unknown>;
+  }): Promise<void>;
   /**
    * Answers an interaction privately, to the person who clicked only.
    *
@@ -195,8 +206,12 @@ export function createSlackClient(options: SlackClientOptions): SlackClient {
       return ts === undefined ? { fileId } : { fileId, ts };
     },
 
-    async updateView({ viewId, view }) {
-      await callJson("views.update", { view_id: viewId, view });
+    async updateView({ viewId, externalId, view }) {
+      await callJson("views.update", {
+        ...(viewId ? { view_id: viewId } : {}),
+        ...(externalId ? { external_id: externalId } : {}),
+        view,
+      });
     },
 
     async getPermalink(channel, messageTs) {

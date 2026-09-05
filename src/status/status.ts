@@ -78,7 +78,17 @@ export async function buildStatusSummary(input: StatusInput): Promise<string> {
   // Describes what is needed next rather than what has happened — "complete"
   // tells the reviewer nothing, "awaiting your confirmation" tells her what to
   // do.
-  if (batch.state === "delivered") {
+  if (batch.state === "uploaded") {
+    // Reachable when the uploader closes the modal before pressing Generate.
+    // Without this it reads as a batch mid-generation, and the reviewer waits
+    // for photographs that were never asked for.
+    lines.push(
+      "",
+      ":pause_button: This batch was read but never started — nothing has " +
+        "been generated or charged. Run `/luma upload` to send the file " +
+        "again when you're ready.",
+    );
+  } else if (batch.state === "delivered") {
     lines.push("", ":white_check_mark: Confirmed and handed over.");
   } else if (pending === 0 && approved + discarded > 0) {
     lines.push("", ":hourglass: Everything is decided — *awaiting your confirmation*.");

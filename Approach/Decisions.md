@@ -1345,3 +1345,65 @@ nothing undoes it. It now sits on the same page as up to 48 approve and
 discard buttons, which is exactly the context in which a mis-tap is likely.
 The deliberate friction of D22 was previously supplied by the action living in
 a different surface; with the surfaces merged, the friction has to be explicit.
+
+---
+
+## D44 — The recap is a modal step, not a channel message
+
+**Decision.** `/luma upload` now runs entirely inside one modal stack: attach a
+CSV → a "reading your file" view → the recap, whose **submit button is
+Generate**. Nothing about the upload reaches the channel until a batch actually
+starts.
+
+**Why the estimate and the decision are one view.** Previously the recap was a
+channel message with a Generate button attached, which meant the bill and the
+button were a message anyone could act on, and a rejected file was announced to
+everyone. Making Generate the modal's submit means you cannot press it without
+the estimate in front of you — the friction is structural rather than
+typographic.
+
+**Why a pushed "reading" view.** Slack gives a `view_submission` about three
+seconds to respond, and downloading plus parsing a catalog does not reliably
+fit. So the response is `response_action: "push"` with a view that says the
+work has started, and the deferred task draws its own outcome into that view
+when it finishes. This is the same shape as D33's "announce first, work second".
+
+**How we find the view again.** A view pushed in a submission response never
+tells us its id. Slack lets a view carry an `external_id` we choose, and
+`views.update` accepts it in place of `view_id` — so the id is minted before
+the push and used after it. It is unique per workspace, hence a UUID rather
+than the batch id, which does not exist yet at push time.
+
+**A failed upload has no submit button at all.** The error view is a view with
+no `submit`, so there is nothing to press. Refusing after the press would be
+worse than not offering.
+
+---
+
+## D45 — The cost goes to the channel when the batch starts
+
+**Decision.** The public "generating N photos" message now names the estimate
+and the model. The recap that used to carry that number is private under D44.
+
+**Why.** The upload is one person's business; the spend is the team's. Moving
+the recap into a modal removed the only place the channel saw a price, and a
+pipeline that spends money without saying so in the shared room is the thing
+the brief was worried about.
+
+**Recomputed, not carried.** The recap describes a *file*; this describes a
+*batch*, and only the second is a commitment. Both derive from the same rows so
+they agree, but the number quoted publicly is taken at the moment of spending.
+
+---
+
+## D46 — One @-mention per batch, and it is the last one
+
+**Decision.** The "batch has started" message names nobody. The single ping is
+"ready for review", at the end, and it now carries the overview link.
+
+**Why.** I briefly added "run by @someone" to the start message for
+accountability and it put two pings on one batch — usually on the same person,
+since the uploader is normally the approver. The whole notification design
+rests on the stream being quiet enough that the one ping means *your turn*. A
+second one trains people to ignore both. Accountability is better served by the
+audit trail than by a notification.

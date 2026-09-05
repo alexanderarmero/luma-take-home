@@ -1,13 +1,13 @@
 import type { SqlClient } from "../db/client.js";
 import { addBatchRows, createBatch } from "../db/repository.js";
-import type { Block, SlackClient } from "../slack/client.js";
+import type { SlackClient } from "../slack/client.js";
 import { parseCatalog } from "./parse.js";
 import { buildRecap, planBatch } from "./recap.js";
 
 export const UPLOAD_CALLBACK_ID = "catalog_upload";
 export const UPLOAD_BLOCK_ID = "catalog_file";
 export const UPLOAD_ACTION_ID = "catalog_file_input";
-export const GENERATE_ACTION_ID = "generate_batch";
+export const RECAP_CALLBACK_ID = "catalog_recap";
 
 /**
  * The upload modal.
@@ -47,28 +47,79 @@ export function buildUploadModal(): Record<string, unknown> {
   };
 }
 
-function recapBlocks(text: string, batchId: number): Block[] {
-  return [
-    { type: "section", text: { type: "mrkdwn", text } },
-    {
-      type: "actions",
-      elements: [
-        {
-          type: "button",
-          action_id: GENERATE_ACTION_ID,
-          text: { type: "plain_text", text: "Generate", emoji: true },
-          style: "primary",
-          value: String(batchId),
+/**
+ * The view pushed the instant the upload is submitted.
+ *
+ * Reading and parsing the file takes longer than the three seconds Slack
+ * allows for a submission response, so the honest thing to show is that the
+ * work has started. `external_id` is chosen here because a view pushed in a
+ * submission response never tells us its id — this is how we find it again.
+ */
+export function buildCheckingModal(externalId: string): Record<string, unknown> {
+  return {
+    type: "modal",
+    external_id: externalId,
+    title: { type: "plain_text", text: "Reading your file" },
+    close: { type: "plain_text", text: "Cancel" },
+    blocks: [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text:
+            ":hourglass_flowing_sand: *Reading your catalog.*\n\nThis takes a " +
+            "few seconds. Nothing has been generated and nothing has been " +
+            "charged.",
         },
-      ],
-    },
-  ];
+      },
+    ],
+  };
+}
+
+/**
+ * The recap, as the second step of the upload rather than a channel message.
+ *
+ * Generating is the modal's own submit button, so the estimate and the
+ * decision are the same view: you cannot press Generate without the bill in
+ * front of you. The batch id rides in `private_metadata`, which is the only
+ * state Slack carries between a view and its submission.
+ */
+export function buildRecapModal(
+  externalId: string,
+  text: string,
+  batchId: number,
+): Record<string, unknown> {
+  return {
+    type: "modal",
+    external_id: externalId,
+    callback_id: RECAP_CALLBACK_ID,
+    private_metadata: String(batchId),
+    title: { type: "plain_text", text: "Ready to generate" },
+    submit: { type: "plain_text", text: "Generate" },
+    close: { type: "plain_text", text: "Cancel" },
+    blocks: [{ type: "section", text: { type: "mrkdwn", text } }],
+  };
+}
+
+/** Same view, no submit button: there is nothing to press Generate on. */
+export function buildIngestErrorModal(
+  externalId: string,
+  text: string,
+): Record<string, unknown> {
+  return {
+    type: "modal",
+    external_id: externalId,
+    title: { type: "plain_text", text: "I can't use this file" },
+    close: { type: "plain_text", text: "Close" },
+    blocks: [{ type: "section", text: { type: "mrkdwn", text } }],
+  };
 }
 
 export interface IngestInput {
   slack: SlackClient;
   db: SqlClient;
-  channel: string;
+  /** The open modal to draw the outcome into. */
+  externalId: string;
   fileUrl: string;
   filename: string;
 }
@@ -78,22 +129,33 @@ export type IngestOutcome =
   | { ok: false; error: string };
 
 /**
- * Downloads the uploaded catalog, validates it, records the batch, and posts
- * the recap.
+ * Downloads the uploaded catalog, validates it, records the batch, and draws
+ * the recap into the modal the uploader still has open.
  *
  * Nothing is generated and nothing is spent. This is the answer to "don't burn
  * our budget on stuff she'll reject" — not a smaller bill, but seeing the bill
  * first, which costs nothing because the validation has to happen anyway.
+ *
+ * It stays in the modal because a rejected file is the uploader's problem to
+ * fix, not news for the channel. The channel hears about a batch when one
+ * actually starts.
  */
 export async function ingestCatalog(input: IngestInput): Promise<IngestOutcome> {
-  const { slack, db, channel, fileUrl, filename } = input;
+  const { slack, db, externalId, fileUrl, filename } = input;
+
+  const fail = async (message: string) => {
+    await slack.updateView({
+      externalId,
+      view: buildIngestErrorModal(externalId, message),
+    });
+  };
 
   let csv: string;
   try {
     csv = await slack.downloadFile(fileUrl);
   } catch (error) {
     const message = `I couldn't read *${filename}*: ${(error as Error).message}`;
-    await slack.postMessage({ channel, text: message });
+    await fail(message);
     return { ok: false, error: message };
   }
 
@@ -102,8 +164,7 @@ export async function ingestCatalog(input: IngestInput): Promise<IngestOutcome> 
   if (!parsed.ok) {
     const lines = [`*${filename}* — I can't use this file.`, "", parsed.error];
     for (const warning of parsed.warnings) lines.push(`• ${warning}`);
-    const message = lines.join("\n");
-    await slack.postMessage({ channel, text: message });
+    await fail(lines.join("\n"));
     return { ok: false, error: parsed.error };
   }
 
@@ -115,10 +176,9 @@ export async function ingestCatalog(input: IngestInput): Promise<IngestOutcome> 
   const plan = planBatch(parsed.rows);
   const text = buildRecap(plan, parsed.warnings, filename);
 
-  await slack.postMessage({
-    channel,
-    text,
-    blocks: recapBlocks(text, batch.id),
+  await slack.updateView({
+    externalId,
+    view: buildRecapModal(externalId, text, batch.id),
   });
 
   return { ok: true, batchId: batch.id, imagesToReview: plan.totalImagesToReview };
