@@ -32,7 +32,14 @@ export async function startGeneration(
   let passThrough = 0;
   let translated = 0;
 
-  const promptWriter = options.promptWriterFor?.(buildBrandContext(rows));
+  // Constructing the writer can throw — a bad key, a missing dependency — and
+  // that must not take the batch down with it.
+  let promptWriter;
+  try {
+    promptWriter = options.promptWriterFor?.(buildBrandContext(rows));
+  } catch (error) {
+    log(`[prompts] no prompt writer available: ${(error as Error).message}`);
+  }
 
   for (const row of rows) {
     if (row.shotIdea === null) {

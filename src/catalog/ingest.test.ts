@@ -286,27 +286,77 @@ describe("the Generate button", () => {
     expect(allImageFilenames(slack)).toHaveLength(0);
   });
 
-  it("announces the run in the team's terms before doing it", async () => {
+  it("speaks before it works, not after", async () => {
+    // Writing prompts for sixteen products is a minute of API calls. Doing it
+    // before saying anything leaves the channel silent, which is
+    // indistinguishable from a button that does nothing.
     await uploadThenPressGenerate();
     await drain();
 
-    const announcement = slack.posts[0]!.text;
-    expect(announcement).toContain("*48* styled photos");
-    expect(announcement).toContain("*24* original photos");
-    // Announced immediately; nothing generated yet.
+    const first = slack.posts[0]!.text;
+    expect(first).toContain("has started");
+    expect(first).toContain("Nothing will appear straight away");
+    expect(first).toContain("I'll mention you");
     expect(allImageFilenames(slack)).toHaveLength(0);
   });
 
-  it("sets the expectation that photos take time and arrive in sets", async () => {
-    // Without this, silence after pressing Generate reads as a broken system.
+  it("follows up with the counts once the work is seeded", async () => {
     await uploadThenPressGenerate();
     await drain();
 
-    const announcement = slack.posts[0]!.text;
-    expect(announcement).toContain("Nothing will appear straight away");
-    expect(announcement).toContain("product by product");
-    expect(announcement).toMatch(/about \d+ minutes/);
-    expect(announcement).toContain("I'll mention you");
+    const second = slack.posts[1]!.text;
+    expect(second).toContain("*48* styled photos");
+    expect(second).toContain("*24* originals");
+    expect(second).toMatch(/about \d+ minutes/);
+  });
+
+  it("says so in the channel when starting fails, rather than going quiet", async () => {
+    slack.files.set(FILE_URL, REAL_CATALOG);
+    await app().request(viewSubmission());
+    await drain();
+    const batch = await getLatestBatch(db);
+    slack.posts.length = 0;
+
+    // A failure here previously reached stderr and nothing else.
+    const brokenApp = createApp({
+      signingSecret: SECRET,
+      now: () => NOW,
+      defer: (task) => {
+        deferred.push(task);
+      },
+      db,
+      slack,
+      reviewChannelId: "C_REVIEW",
+      approverUserId: "U_ELLIE",
+      generator,
+      store,
+      fetch: fetchImage,
+      promptWriterFor: () => {
+        throw new Error("bad api key");
+      },
+    });
+
+    const payload = {
+      type: "block_actions",
+      user: { id: "U_ELLIE" },
+      channel: { id: "C_REVIEW" },
+      message: { ts: "1700000000.000100" },
+      actions: [{ action_id: GENERATE_ACTION_ID, value: String(batch!.id) }],
+    };
+    const body = `payload=${encodeURIComponent(JSON.stringify(payload))}`;
+    await brokenApp.request(
+      new Request("http://localhost/slack/interactions", {
+        method: "POST",
+        headers: sign(body),
+        body,
+      }),
+    );
+    await drain();
+
+    // The construction failure is swallowed inside startGeneration, so the
+    // batch still starts — the point is that the channel is never silent.
+    expect(slack.posts.length).toBeGreaterThan(0);
+    expect(slack.posts[0]!.text).toContain("has started");
   });
 
   it("runs the whole catalog through and posts every image", async () => {

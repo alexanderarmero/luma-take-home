@@ -442,47 +442,61 @@ export function createApp(deps: AppDeps) {
         return c.body(null, 200);
       }
 
-      // Seeds the work and announces it, then hands off. The running is done
-      // by the background worker rather than here: a deferred task dies with
-      // its process, and a batch has to survive a restart.
+      // Announce first, work second. Turning sixteen shot ideas into prompts
+      // is a minute or more of API calls, and doing it before saying anything
+      // leaves the channel silent — indistinguishable from a broken button.
       deps.defer(async () => {
-        const counts = await startGeneration(deps.db, batchId, {
-          ...(deps.promptWriterFor ? { promptWriterFor: deps.promptWriterFor } : {}),
-          log: (message) => console.log(message),
-        });
-        await setBatchState(deps.db, batchId, "generating");
-
-        const total = counts.styled + counts.passThrough;
         const reviewToken = await ensureReviewToken(deps.db, batchId);
         const overviewUrl = deps.publicBaseUrl
           ? `${deps.publicBaseUrl}/review/${reviewToken}`
           : null;
-        await slack.postMessage({
-          channel,
-          text: [
-            `*Batch #${batchId} has started.*`,
-            "",
-            `I'm generating *${counts.styled}* styled photos and copying ` +
-              `*${counts.passThrough}* original photos across.`,
-            "",
-            "*Nothing will appear straight away.* Photos are posted here once a " +
-              "product's whole set has finished, so you'll see them arrive " +
-              "product by product rather than one at a time.",
-            "",
-            `This usually takes ${describeWait(total)} for a batch this size. ` +
+
+        try {
+          await slack.postMessage({
+            channel,
+            text: [
+              `*Batch #${batchId} has started.*`,
+              "",
+              "I'm writing the prompts now, then generating. *Nothing will " +
+                "appear straight away* — photos are posted once a product's " +
+                "whole set has finished, so they arrive product by product.",
+              "",
               "You don't need to wait here — I'll mention you once the whole " +
-              "batch is ready to review.",
-            ...(overviewUrl
-              ? [
-                  "",
-                  `*Overview page:* ${overviewUrl}`,
-                  "_Watch progress there as it fills in. Approving and " +
-                    "discarding happens here in Slack, in each product's thread._",
-                ]
-              : []),
-          ].join("\n"),
-        });
-        void reviewChannelId;
+                "batch is ready to review.",
+              ...(overviewUrl
+                ? ["", `*Overview page:* ${overviewUrl}`]
+                : []),
+            ].join("\n"),
+          });
+
+          const counts = await startGeneration(deps.db, batchId, {
+            ...(deps.promptWriterFor ? { promptWriterFor: deps.promptWriterFor } : {}),
+            log: (message) => console.log(message),
+          });
+          await setBatchState(deps.db, batchId, "generating");
+
+          const total = counts.styled + counts.passThrough;
+          await slack.postMessage({
+            channel,
+            text:
+              `Generating *${counts.styled}* styled photos and copying ` +
+              `*${counts.passThrough}* originals across — *${total}* to review ` +
+              `in all. This usually takes ${describeWait(total)}.`,
+          });
+        } catch (error) {
+          // Without this the failure reaches stderr and nobody is told, which
+          // looks exactly like a button that does nothing.
+          console.error("[generate] failed", error);
+          await slack
+            .postMessage({
+              channel,
+              text:
+                `I couldn't start batch #${batchId}: ${(error as Error).message}\n` +
+                "Nothing has been charged. Press Generate again, or re-upload " +
+                "the file if it keeps failing.",
+            })
+            .catch(() => {});
+        }
       });
 
       return c.body(null, 200);
