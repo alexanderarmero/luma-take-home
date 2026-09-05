@@ -37,6 +37,8 @@ export interface SlackClient {
   updateMessage(input: UpdateMessageInput): Promise<void>;
   uploadFile(input: UploadFileInput): Promise<{ fileId: string; ts?: string }>;
   openView(input: { triggerId: string; view: Record<string, unknown> }): Promise<void>;
+  /** Redraws an open modal, so a list reflects a change made inside it. */
+  updateView(input: { viewId: string; view: Record<string, unknown> }): Promise<void>;
   /**
    * Answers an interaction privately, to the person who clicked only.
    *
@@ -191,6 +193,10 @@ export function createSlackClient(options: SlackClientOptions): SlackClient {
       // a missing ts is recoverable, a crash here is not.
       const ts = channel ? extractShareTs(completed, channel) : undefined;
       return ts === undefined ? { fileId } : { fileId, ts };
+    },
+
+    async updateView({ viewId, view }) {
+      await callJson("views.update", { view_id: viewId, view });
     },
 
     async getPermalink(channel, messageTs) {
