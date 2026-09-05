@@ -83,7 +83,7 @@ describe("updateMessage", () => {
   });
 });
 
-describe("uploadImage", () => {
+describe("uploadFile", () => {
   it("walks the three-call upload flow in order", async () => {
     const calls: string[] = [];
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
@@ -102,7 +102,7 @@ describe("uploadImage", () => {
       return jsonResponse({ ok: true, files: [{ id: "F123" }] });
     }) as unknown as typeof fetch;
 
-    const result = await clientWith(fetchImpl).uploadImage({
+    const result = await clientWith(fetchImpl).uploadFile({
       channel: "C123",
       filename: "HG-002_morning-kitchen_01.jpg",
       title: "HG-002_morning-kitchen_01.jpg",
@@ -131,7 +131,7 @@ describe("uploadImage", () => {
       return jsonResponse({ ok: true, files: [{ id: "F1" }] });
     }) as unknown as typeof fetch;
 
-    await clientWith(fetchImpl).uploadImage({
+    await clientWith(fetchImpl).uploadFile({
       channel: "C1",
       filename: "a.jpg",
       title: "a.jpg",
@@ -155,7 +155,7 @@ describe("uploadImage", () => {
       return jsonResponse({ ok: true, files: [{ id: "F1" }] });
     }) as unknown as typeof fetch;
 
-    await clientWith(fetchImpl).uploadImage({
+    await clientWith(fetchImpl).uploadFile({
       channel: "C1",
       filename: "a.jpg",
       title: "a.jpg",
@@ -177,7 +177,7 @@ describe("uploadImage", () => {
     }) as unknown as typeof fetch;
 
     await expect(
-      clientWith(fetchImpl).uploadImage({
+      clientWith(fetchImpl).uploadFile({
         channel: "C1",
         filename: "a.jpg",
         title: "a.jpg",

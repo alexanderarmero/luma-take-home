@@ -19,7 +19,10 @@ import { describeWait } from "../generation/estimate.js";
 import { startGeneration } from "../generation/start.js";
 import type { ImageModel } from "../pricing.js";
 import { buildStatusSummary } from "../status/status.js";
+import { confirmBatch, CONFIRM_ACTION_ID } from "../decisions/confirm.js";
 import { decide } from "../decisions/decide.js";
+import { buildApprovedCatalog } from "../export/catalog.js";
+import { buildLatestExport } from "../export/zip.js";
 import {
   APPROVE_ACTION_ID,
   DISCARD_ACTION_ID,
@@ -65,6 +68,7 @@ const USAGE = [
   "• `/luma ping` — check I'm awake",
   "• `/luma upload` — drop in a catalog CSV",
   "• `/luma status` — where the latest batch stands",
+  "• `/luma export` — download the approved photos of the latest confirmed batch",
   "• `/luma verify` — post the platform-verification probes",
 ].join("\n");
 
@@ -115,7 +119,15 @@ export function createApp(deps: AppDeps) {
       case "status":
         try {
           return c.json(
-            ephemeral(await buildStatusSummary(deps.db, deps.publicBaseUrl)),
+            ephemeral(
+              await buildStatusSummary({
+                db: deps.db,
+                ...(deps.slack ? { slack: deps.slack } : {}),
+                ...(deps.reviewChannelId ? { channel: deps.reviewChannelId } : {}),
+                ...(deps.publicBaseUrl ? { publicBaseUrl: deps.publicBaseUrl } : {}),
+                pendingOnly: (params.get("text") ?? "").includes("pending"),
+              }),
+            ),
           );
         } catch (error) {
           // Slack renders an unhandled error as a bare "dispatch_failed",
@@ -141,6 +153,42 @@ export function createApp(deps: AppDeps) {
           console.error("[/luma upload] could not open modal", error);
           return c.json(ephemeral("I couldn't open the upload window — try again."));
         }
+      }
+
+      case "export": {
+        const { slack, store, reviewChannelId } = deps;
+        if (!slack || !store || !reviewChannelId) {
+          return c.json(ephemeral("Export isn't configured on this instance."));
+        }
+        // Fetching every approved image and zipping it is far too slow for the
+        // acknowledgement window.
+        deps.defer(async () => {
+          const result = await buildLatestExport(deps.db, store);
+          if (!result.ok) {
+            await slack.postMessage({ channel: reviewChannelId, text: result.reason });
+            return;
+          }
+          await slack.uploadFile({
+            channel: reviewChannelId,
+            filename: result.filename,
+            title: result.filename,
+            bytes: result.bytes,
+            blocks: [
+              {
+                type: "section",
+                text: {
+                  type: "mrkdwn",
+                  text:
+                    `*Batch #${result.batchId} — ${result.count} approved ` +
+                    `${result.count === 1 ? "photo" : "photos"}.*\nEvery file is named ` +
+                    "for its product and shot idea. MANIFEST.txt lists them with " +
+                    "their checksums.",
+                },
+              },
+            ],
+          });
+        });
+        return c.json(ephemeral("Putting the zip together…"));
       }
 
       case "verify": {
@@ -273,6 +321,52 @@ export function createApp(deps: AppDeps) {
     const channel = payload.channel?.id;
     const ts = payload.message?.ts;
     const userId = payload.user?.id;
+
+    if (action?.action_id === CONFIRM_ACTION_ID && deps.slack && deps.reviewChannelId) {
+      const { slack, reviewChannelId, approverUserId } = deps;
+      const batchId = Number(action.value);
+      const responseUrl = payload.response_url;
+
+      deps.defer(async () => {
+        const outcome = await confirmBatch({
+          db: deps.db,
+          batchId,
+          actorUserId: userId ?? "",
+          approverUserId: approverUserId ?? "",
+        });
+
+        if (!outcome.ok) {
+          if (responseUrl) await slack.respondEphemeral(responseUrl, outcome.reason);
+          return;
+        }
+
+        await slack.postMessage({
+          channel: reviewChannelId,
+          text:
+            `*Batch #${outcome.batchId} is confirmed.* ${outcome.approved} ` +
+            `${outcome.approved === 1 ? "photo is" : "photos are"} ready to publish — ` +
+            "run `/luma export` to download them.",
+        });
+
+        // The one artefact that writes back to the spreadsheet the team lives
+        // in: which requests are actually done.
+        if (deps.publicBaseUrl) {
+          const csv = await buildApprovedCatalog(
+            deps.db,
+            outcome.batchId,
+            deps.publicBaseUrl,
+          );
+          await slack.uploadFile({
+            channel: reviewChannelId,
+            filename: csv.filename,
+            title: csv.filename,
+            bytes: Buffer.from(csv.content, "utf8"),
+          });
+        }
+      });
+
+      return c.body(null, 200);
+    }
 
     const isDecision =
       action?.action_id === APPROVE_ACTION_ID ||

@@ -2,14 +2,14 @@ import type {
   PostMessageInput,
   SlackClient,
   UpdateMessageInput,
-  UploadImageInput,
+  UploadFileInput,
 } from "./client.js";
 
 export interface FakeSlack extends SlackClient {
   posts: PostMessageInput[];
   ephemerals: Array<{ responseUrl: string; text: string }>;
   updates: UpdateMessageInput[];
-  uploads: UploadImageInput[];
+  uploads: UploadFileInput[];
   views: Array<{ triggerId: string; view: Record<string, unknown> }>;
   /** Contents returned by downloadFile, keyed by URL. */
   files: Map<string, string>;
@@ -40,7 +40,7 @@ export function createFakeSlack(): FakeSlack {
     updateMessage: async (input) => {
       fake.updates.push(input);
     },
-    uploadImage: async (input) => {
+    uploadFile: async (input) => {
       fake.uploads.push(input);
       const n = fake.uploads.length;
       return { fileId: `F${n}`, ts: `170000000${n}.000200` };
@@ -48,6 +48,8 @@ export function createFakeSlack(): FakeSlack {
     openView: async (input) => {
       fake.views.push(input);
     },
+    getPermalink: async (channel, messageTs) =>
+      `https://example.slack.com/archives/${channel}/p${messageTs.replace(".", "")}`,
     respondEphemeral: async (responseUrl, text) => {
       fake.ephemerals.push({ responseUrl, text });
     },

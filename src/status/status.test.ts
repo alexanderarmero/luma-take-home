@@ -1,71 +1,217 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  addBatchRows,
   addImages,
   createBatch,
+  markImageStored,
   recordDecision,
+  setBatchState,
   setDeliveredBatch,
+  setJobState,
+  setProductMessageTs,
 } from "../db/repository.js";
 import { createTestDb, type TestDb } from "../db/testing.js";
+import { createFakeSlack, type FakeSlack } from "../slack/testing.js";
+import { createMemoryStore, type MemoryStore } from "../storage/memory.js";
 import { buildStatusSummary } from "./status.js";
 
+const ELLIE = "U_ELLIE";
 let db: TestDb;
+let slack: FakeSlack;
+let store: MemoryStore;
+
 beforeEach(async () => {
   db = await createTestDb();
+  slack = createFakeSlack();
+  store = createMemoryStore();
 });
 afterEach(async () => {
   await db?.close();
 });
 
-const img = (sku: string, slot: number) => ({
-  sku,
-  productName: `Product ${sku}`,
-  slot,
-  kind: "styled" as const,
-  filename: `${sku}_scene_0${slot}.jpg`,
+const status = (extra: Record<string, unknown> = {}) =>
+  buildStatusSummary({ db, slack, channel: "C_REVIEW", ...extra });
+
+async function batchWith(
+  products: Array<{ sku: string; slots: number; shotIdea?: string | null }>,
+) {
+  const batch = await createBatch(db, { sourceFilename: "catalog.csv" });
+  await addBatchRows(
+    db,
+    batch.id,
+    products.map((p) => ({
+      sku: p.sku,
+      productName: `Product ${p.sku}`,
+      category: "Ceramics",
+      colour: "Sage",
+      material: "Stoneware",
+      price: "$28",
+      photoUrl: "https://example.com/a.jpg",
+      shotIdea: p.shotIdea === undefined ? "kitchen" : p.shotIdea,
+    })),
+  );
+
+  const images = await addImages(
+    db,
+    batch.id,
+    products.flatMap((p) =>
+      Array.from({ length: p.slots }, (_, i) => ({
+        sku: p.sku,
+        productName: `Product ${p.sku}`,
+        slot: i + 1,
+        kind: "styled" as const,
+        filename: `${p.sku}_kitchen_0${i + 1}.jpg`,
+      })),
+    ),
+  );
+
+  for (const image of images) {
+    const stored = await store.put({
+      bytes: Buffer.from(image.filename),
+      contentType: "image/jpeg",
+      filename: image.filename,
+    });
+    await markImageStored(db, image.id, {
+      objectKey: stored.key,
+      checksum: stored.checksum,
+    });
+  }
+  for (const p of products) {
+    await setProductMessageTs(db, batch.id, p.sku, "1700000000.000100");
+  }
+  await setBatchState(db, batch.id, "ready_for_review");
+  return { batch, images };
+}
+
+const approve = (id: string) =>
+  recordDecision(db, { imageId: id, decision: "approve", actor: ELLIE });
+const discard = (id: string) =>
+  recordDecision(db, { imageId: id, decision: "discard", actor: ELLIE });
+
+describe("with nothing to report", () => {
+  it("says so plainly", async () => {
+    expect((await status()).toLowerCase()).toContain("no batches");
+  });
 });
 
-describe("buildStatusSummary", () => {
-  it("says so plainly when nothing has been uploaded yet", async () => {
-    const text = await buildStatusSummary(db);
-    expect(text.toLowerCase()).toContain("no batches");
+describe("the summary", () => {
+  it("counts approved, discarded and outstanding", async () => {
+    const { images } = await batchWith([{ sku: "HG-002", slots: 3 }]);
+    await approve(images[0]!.id);
+    await discard(images[1]!.id);
+
+    const text = await status();
+    expect(text).toContain("1 approved");
+    expect(text).toContain("1 discarded");
+    expect(text).toContain("1 still to review");
   });
 
-  it("reports counts for the latest batch", async () => {
-    const batch = await createBatch(db, { sourceFilename: "catalog.csv" });
-    const images = await addImages(db, batch.id, [
-      img("HG-002", 1),
-      img("HG-002", 2),
-      img("HG-005", 1),
+  it("reports what has been spent", async () => {
+    await batchWith([{ sku: "HG-002", slots: 3 }]);
+    expect(await status()).toMatch(/\$0\.\d\d spent/);
+  });
+
+  it("mentions photos that could not be generated", async () => {
+    const { images } = await batchWith([{ sku: "HG-002", slots: 2 }]);
+    await setJobState(db, images[0]!.id, "failed", { failureCode: "content_moderated" });
+    expect(await status()).toContain("couldn't be generated");
+  });
+});
+
+describe("what to do next", () => {
+  it("lists the products still needing a decision", async () => {
+    const { images } = await batchWith([
+      { sku: "HG-002", slots: 2 },
+      { sku: "HG-005", slots: 2 },
     ]);
-    await recordDecision(db, {
-      imageId: images[0]!.id,
-      decision: "approve",
-      actor: "U_ELLIE",
-    });
+    for (const image of images.slice(0, 2)) await approve(image.id);
 
-    const text = await buildStatusSummary(db);
-    expect(text).toContain("catalog.csv");
-    expect(text).toMatch(/1\D+approved/i);
-    expect(text).toMatch(/2\D+pending/i);
+    const text = await status();
+    expect(text).toContain("Still needing you (1)");
+    expect(text).toContain("HG-005");
+    expect(text).not.toMatch(/HG-002 · Product HG-002 \(/);
   });
 
-  it("never claims work that has not been committed", async () => {
-    // Counts are derived from committed rows, so a batch with no images
-    // reports zero rather than an optimistic figure from anywhere else.
-    const batch = await createBatch(db, { sourceFilename: "empty.csv" });
-    const text = await buildStatusSummary(db);
-    expect(text).toContain("empty.csv");
-    expect(text).toMatch(/0\D+images/i);
-    expect(batch.id).toBeGreaterThan(0);
+  it("deep-links each one, so it is a tap rather than a scroll", async () => {
+    await batchWith([{ sku: "HG-002", slots: 2 }]);
+    expect(await status()).toContain("https://example.slack.com/archives/C_REVIEW/p");
   });
 
-  it("distinguishes the latest batch from the delivered one", async () => {
-    const delivered = await createBatch(db, { sourceFilename: "shipped.csv" });
-    await setDeliveredBatch(db, delivered.id);
-    await createBatch(db, { sourceFilename: "in-progress.csv" });
+  it("says how many are left on each", async () => {
+    const { images } = await batchWith([{ sku: "HG-002", slots: 3 }]);
+    await approve(images[0]!.id);
+    expect(await status()).toContain("(2 left)");
+  });
 
-    const text = await buildStatusSummary(db);
-    expect(text).toContain("in-progress.csv");
-    expect(text).toContain(`#${delivered.id}`);
+  it("stops listing before it becomes a wall, and says how many more", async () => {
+    await batchWith(
+      Array.from({ length: 20 }, (_, i) => ({
+        sku: `HG-${String(i + 1).padStart(3, "0")}`,
+        slots: 1,
+      })),
+    );
+    const text = await status();
+    expect(text).toContain("Still needing you (20)");
+    expect(text).toContain("and 8 more");
+  });
+
+  it("asks for confirmation once everything is decided", async () => {
+    // Describes what is needed next, rather than what has happened.
+    const { images } = await batchWith([{ sku: "HG-002", slots: 2 }]);
+    for (const image of images) await approve(image.id);
+
+    const text = await status();
+    expect(text).toContain("awaiting your confirmation");
+    expect(text).not.toContain("Still needing you");
+  });
+
+  it("says when a batch has been handed over", async () => {
+    const { batch, images } = await batchWith([{ sku: "HG-002", slots: 1 }]);
+    for (const image of images) await approve(image.id);
+    await setBatchState(db, batch.id, "delivered");
+    await setDeliveredBatch(db, batch.id);
+
+    const text = await status();
+    expect(text).toContain("Confirmed and handed over");
+    expect(text).toContain(`batch #${batch.id}`);
+  });
+});
+
+describe("under-delivery", () => {
+  it("names products that finished with fewer than two approved shots", async () => {
+    // Silence here would look identical to success.
+    const { images } = await batchWith([{ sku: "HG-002", slots: 3 }]);
+    await approve(images[0]!.id);
+    await discard(images[1]!.id);
+    await discard(images[2]!.id);
+
+    const text = await status();
+    expect(text).toContain("fewer than two approved");
+    expect(text).toContain("HG-002");
+  });
+
+  it("stays quiet when every product got enough", async () => {
+    const { images } = await batchWith([{ sku: "HG-002", slots: 3 }]);
+    for (const image of images) await approve(image.id);
+    expect(await status()).not.toContain("fewer than two");
+  });
+
+  it("does not count a product still being decided", async () => {
+    const { images } = await batchWith([{ sku: "HG-002", slots: 3 }]);
+    await approve(images[0]!.id);
+    expect(await status()).not.toContain("fewer than two");
+  });
+});
+
+describe("the overview link", () => {
+  it("is included when the service knows its own address", async () => {
+    await batchWith([{ sku: "HG-002", slots: 1 }]);
+    const text = await status({ publicBaseUrl: "https://shots.test" });
+    expect(text).toMatch(/Overview: https:\/\/shots\.test\/review\/[0-9a-f]{32}/);
+  });
+
+  it("is left out when it does not", async () => {
+    await batchWith([{ sku: "HG-002", slots: 1 }]);
+    expect(await status()).not.toContain("Overview:");
   });
 });

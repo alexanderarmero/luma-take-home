@@ -3,11 +3,14 @@ import {
   findBatchesAwaitingAnnouncement,
   setBatchState,
 } from "../db/repository.js";
+import { buildGeneratedCatalog } from "../export/catalog.js";
 import { drain, type WorkerDeps } from "./worker.js";
 
 export interface LoopOptions {
   intervalMs?: number;
   approverUserId?: string;
+  /** Absolute base for the image links written into the catalog export. */
+  publicBaseUrl?: string;
   /** Bounds a single tick in tests; production wants no ceiling. */
   maxStepsPerTick?: number;
 }
@@ -48,6 +51,17 @@ export async function tick(deps: WorkerDeps, options: LoopOptions = {}): Promise
     }
 
     await deps.slack.postMessage({ channel: deps.channel, text: lines.join("\n") });
+
+    // The catalog with a column per shot, so the sheet reflects what was made.
+    if (options.publicBaseUrl) {
+      const csv = await buildGeneratedCatalog(deps.db, batchId, options.publicBaseUrl);
+      await deps.slack.uploadFile({
+        channel: deps.channel,
+        filename: csv.filename,
+        title: csv.filename,
+        bytes: Buffer.from(csv.content, "utf8"),
+      });
+    }
   }
 
   return worked;

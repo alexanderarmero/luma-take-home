@@ -11,13 +11,13 @@ a single un-actioned image silently holding up a whole batch.
 
 **Blocked by:** 03, 09
 
-**Status:** ready-for-agent
+**Status:** done (2026-09-05)
 
-- [ ] The command lists images by name with their state — pending, approved, or discarded
-- [ ] Each entry deep-links to its message, so an outstanding image is one tap away
-- [ ] The listing can be filtered to what is still pending
-- [ ] A batch that is fully actioned but not yet confirmed is reported as awaiting confirmation, described by what is needed next rather than by what has happened
-- [ ] The accrued cost of the batch is reported
-- [ ] Products that finished with fewer than two approved images are reported, so under-delivery is visible rather than silent
-- [ ] Output stays readable at drop scale rather than becoming an unbroken wall of entries
-- [ ] Counts are derived from committed state, never from in-memory counters, so the command cannot report work that did not happen
+- [x] The command lists images by name with their state — pending, approved, or discarded
+- [x] Each entry deep-links to its message, so an outstanding image is one tap away
+- [x] The listing can be filtered to what is still pending
+- [x] A batch that is fully actioned but not yet confirmed is reported as awaiting confirmation, described by what is needed next rather than by what has happened
+- [x] The accrued cost of the batch is reported
+- [x] Products that finished with fewer than two approved images are reported, so under-delivery is visible rather than silent
+- [x] Output stays readable at drop scale rather than becoming an unbroken wall of entries
+- [x] Counts are derived from committed state, never from in-memory counters, so the command cannot report work that did not happen

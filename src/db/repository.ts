@@ -700,6 +700,8 @@ export async function setProductMessageTs(
   );
 }
 
+export type { ProductSummary as ProductView };
+
 export interface ProductSummary {
   sku: string;
   productName: string;
@@ -833,4 +835,55 @@ export async function isBatchFrozen(
     [batchId],
   );
   return rows[0]?.state === "delivered";
+}
+
+export async function getBatchState(db: SqlClient, batchId: number): Promise<string> {
+  const { rows } = await db.query<{ state: string }>(
+    `select state from batches where id = $1`,
+    [batchId],
+  );
+  return rows[0]?.state ?? "uploaded";
+}
+
+export interface ApprovedImage {
+  imageId: string;
+  sku: string;
+  filename: string;
+  objectKey: string;
+  checksum: string | null;
+}
+
+/**
+ * The approved images of one batch, in catalog order.
+ *
+ * Membership is the filter, so a discarded image cannot appear here by any
+ * route — which is the property that keeps the wrong file out of the export.
+ */
+export async function getApprovedImages(
+  db: SqlClient,
+  batchId: number,
+): Promise<ApprovedImage[]> {
+  const { rows } = await db.query<{
+    image_id: string;
+    sku: string;
+    filename: string;
+    object_key: string | null;
+    checksum: string | null;
+  }>(
+    `select i.id as image_id, i.sku, i.filename, i.object_key, i.checksum
+       from approved_images a
+       join images i     on i.id = a.image_id
+       join batch_rows r on r.batch_id = i.batch_id and r.sku = i.sku
+      where a.batch_id = $1 and i.object_key is not null
+      order by r.row_index asc, i.slot asc`,
+    [batchId],
+  );
+
+  return rows.map((r) => ({
+    imageId: r.image_id,
+    sku: r.sku,
+    filename: r.filename,
+    objectKey: r.object_key!,
+    checksum: r.checksum,
+  }));
 }

@@ -1,5 +1,6 @@
 import type { SqlClient } from "../db/client.js";
 import {
+  getBatchState,
   getImageLocation,
   getProductImages,
   isBatchFrozen,
@@ -11,6 +12,7 @@ import {
   buildProductChannelMessage,
 } from "../generation/message.js";
 import type { SlackClient } from "../slack/client.js";
+import { offerConfirmationIfComplete } from "./confirm.js";
 
 export type DecisionOutcome =
   | { ok: true; decision: Decision; filename: string }
@@ -98,6 +100,22 @@ export async function decide(input: DecideInput): Promise<DecisionOutcome> {
     } catch (error) {
       log(`[decide] could not redraw the candidate: ${(error as Error).message}`);
     }
+  }
+
+  // The moment nothing is left undecided, offer the handover. Checking here
+  // rather than on a timer means the control appears immediately after the
+  // decision that completed the batch.
+  try {
+    await offerConfirmationIfComplete({
+      db,
+      slack,
+      channel,
+      batchId: location.batchId,
+      batchState: await getBatchState(db, location.batchId),
+      approverUserId,
+    });
+  } catch (error) {
+    log(`[decide] could not offer confirmation: ${(error as Error).message}`);
   }
 
   return { ok: true, decision, filename: location.filename };

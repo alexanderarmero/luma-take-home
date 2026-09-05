@@ -14,12 +14,12 @@ consequences. That is what makes freezing afterwards acceptable.
 
 **Blocked by:** 08
 
-**Status:** ready-for-agent
+**Status:** done (2026-09-05)
 
-- [ ] A batch completes automatically when the count of approved plus the count of discarded equals its size
-- [ ] The confirm control is posted as a new message at the moment of completion, not carried in the message that opened the batch
-- [ ] The message that opens a batch still explains that confirmation will be needed
-- [ ] The confirm control states what it will do and that decisions cannot be changed afterwards, including the approved and discarded counts
-- [ ] Confirming marks the batch delivered and advances the delivered pointer to it
-- [ ] After confirmation, every further approve or discard on that batch is rejected
-- [ ] A batch that has never been confirmed never becomes the target of the pointer, regardless of its identifier
+- [x] A batch completes automatically when the count of approved plus the count of discarded equals its size
+- [x] The confirm control is posted as a new message at the moment of completion, not carried in the message that opened the batch
+- [x] The message that opens a batch still explains that confirmation will be needed
+- [x] The confirm control states what it will do and that decisions cannot be changed afterwards, including the approved and discarded counts
+- [x] Confirming marks the batch delivered and advances the delivered pointer to it
+- [x] After confirmation, every further approve or discard on that batch is rejected
+- [x] A batch that has never been confirmed never becomes the target of the pointer, regardless of its identifier
