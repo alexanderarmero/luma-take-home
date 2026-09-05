@@ -20,10 +20,10 @@ async function run(fetchImpl: typeof fetch = okFetch) {
 }
 
 describe("verification probes", () => {
-  it("posts all five probes", async () => {
+  it("posts every probe when Slack accepts them", async () => {
     const { report } = await run();
-    expect(report.posted).toHaveLength(5);
     expect(report.failures).toHaveLength(0);
+    expect(report.posted).toHaveLength(7); // 1, 2, 3, 4a, 4b, 4c, 4d
   });
 
   it("mentions the approver in the mute probe", async () => {
@@ -31,41 +31,77 @@ describe("verification probes", () => {
     expect(slack.posts.some((p) => p.text.includes("<@U_ELLIE>"))).toBe(true);
   });
 
-  it("uploads probe 4's images without sharing them to a channel", async () => {
-    // An image block referencing a file needs it hosted, not posted —
-    // otherwise the probe would post the very messages it is supposed to be
-    // testing an alternative to. Two images each for 4a and 4b.
+  it("bisects the image variants smallest first", async () => {
+    // Two attempts already failed with a bare `invalid_blocks`. Isolating one
+    // variable per message is what turns that into an answer.
     const { slack } = await run();
-    const privateUploads = slack.uploads.filter((u) => u.channel === undefined);
-    expect(privateUploads).toHaveLength(4);
+    const labels = slack.posts.map((p) => p.text);
+
+    expect(labels.some((t) => t.includes("4a · one image, public URL"))).toBe(true);
+    expect(labels.some((t) => t.includes("4b · one image, slack_file by id"))).toBe(true);
+    expect(labels.some((t) => t.includes("4c · one image, slack_file by url"))).toBe(true);
+    expect(labels.some((t) => t.includes("4d · two images"))).toBe(true);
   });
 
-  it("tries each reference form in its own message", async () => {
-    // The first version put both forms in one message. One block was
-    // malformed, Slack rejected the whole message with invalid_blocks, and
-    // the form that would have worked never rendered — so the probe answered
-    // nothing. A probe that can fail as a unit is not a probe.
+  it("keeps the simplest variant free of anything that could confound it", async () => {
     const { slack } = await run();
+    const simplest = slack.posts.find((p) => p.text.includes("4a"));
+    const blocks = simplest!.blocks as Array<Record<string, unknown>>;
 
-    const byId = slack.posts.find((p) => p.text.startsWith("Probe 4a"));
-    const byUrl = slack.posts.find((p) => p.text.startsWith("Probe 4b"));
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ type: "image" });
+    // No title, no buttons, no section: one variable at a time.
+    expect(blocks[0]).not.toHaveProperty("title");
+  });
 
-    expect(JSON.stringify(byId!.blocks)).toContain('"slack_file":{"id":');
-    expect(JSON.stringify(byId!.blocks)).not.toContain('"url"');
-    expect(JSON.stringify(byUrl!.blocks)).toContain('"slack_file":{"url":');
+  it("builds 4d as the shape the batched review would actually take", async () => {
+    const { slack } = await run();
+    const target = slack.posts.find((p) => p.text.includes("4d"));
+    const types = (target!.blocks ?? []).map((b) => (b as { type: string }).type);
+    expect(types).toEqual(["section", "image", "actions", "image", "actions"]);
+  });
+
+  it("uploads for the slack_file probes without sharing them anywhere", async () => {
+    // Probe 3 shares deliberately — that is what it tests. The probe-4
+    // uploads must not, or referencing a file by id would be testing nothing.
+    const { slack } = await run();
+    const forProbe4 = slack.uploads.filter((u) => u.filename.startsWith("probe4"));
+    expect(forProbe4.length).toBeGreaterThan(0);
+    expect(forProbe4.every((u) => u.channel === undefined)).toBe(true);
   });
 
   it("never emits a slack_file reference with nothing in it", async () => {
-    // This was the actual bug: files.completeUploadExternal returns only
-    // {id, title}, so the url was undefined and serialised to an empty
-    // object. Slack rejected the entire message.
     const { slack } = await run();
     for (const post of slack.posts) {
       expect(JSON.stringify(post.blocks ?? [])).not.toContain('"slack_file":{}');
     }
   });
 
-  it("skips the url form rather than posting a broken block when no url comes back", async () => {
+  it("records Slack's own explanation when a variant is rejected", async () => {
+    // A bare `invalid_blocks` is what made this take three attempts.
+    const slack = createFakeSlack();
+    slack.postMessage = async (input) => {
+      if (input.text.includes("4b")) {
+        throw new Error(
+          "Slack chat.postMessage failed: invalid_blocks — [ERROR] unsupported field [json-pointer:/blocks/0/slack_file]",
+        );
+      }
+      return { ts: "1.1" };
+    };
+
+    const report = await runVerificationProbes(slack, {
+      channel: "C_REVIEW",
+      approverUserId: "U_ELLIE",
+      fetch: okFetch,
+    });
+
+    expect(report.failures.join(" ")).toContain("json-pointer");
+    // One variant failing must not stop the others.
+    expect(report.posted.join(" ")).toContain("4a");
+    expect(report.posted.join(" ")).toContain("4d");
+  });
+
+  it("fails only its own variant when a url cannot be resolved", async () => {
     const slack = createFakeSlack();
     slack.getFileUrl = async () => undefined;
 
@@ -76,31 +112,13 @@ describe("verification probes", () => {
     });
 
     expect(report.failures.join(" ")).toContain("no url_private");
-    // The id form is unaffected — that is the whole point of splitting them.
-    expect(report.posted.join(" ")).toContain("by file id");
+    expect(report.posted.join(" ")).toContain("4b");
   });
 
-  it("puts a button under each image rather than both at the end", async () => {
-    const { slack } = await run();
-    const probe4 = slack.posts.find((p) => p.text.startsWith("Probe 4a"));
-    const types = (probe4!.blocks ?? []).map((b) => (b as { type: string }).type);
-    expect(types).toEqual(["section", "image", "actions", "image", "actions"]);
-  });
-
-  it("reports a probe that fails without abandoning the others", async () => {
-    const failingFetch = (async () =>
-      new Response("nope", { status: 500 })) as unknown as typeof fetch;
-    const { report } = await run(failingFetch);
-
-    // Probes 1 and 2 need no photo and still go out.
-    expect(report.posted.length).toBeGreaterThanOrEqual(2);
-    expect(report.failures.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it("tells the reader what to look at", async () => {
+  it("tells the reader how to read the result", async () => {
     const { report } = await run();
     const summary = summariseReport(report);
-    expect(summary).toContain("Probes 4a and 4b");
-    expect(summary.toLowerCase()).toContain("both");
+    expect(summary).toContain("Probes 4a to 4d");
+    expect(summary.toLowerCase()).toContain("localises");
   });
 });

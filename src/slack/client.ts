@@ -66,9 +66,27 @@ async function slackJson(
   }
   const body = (await response.json()) as Record<string, unknown>;
   if (body.ok !== true) {
-    throw new Error(`Slack ${method} failed: ${String(body.error ?? "unknown")}`);
+    throw new Error(`Slack ${method} failed: ${describeSlackError(body)}`);
   }
   return body;
+}
+
+/**
+ * Slack's error code alone is often useless.
+ *
+ * `invalid_blocks` says a message was rejected but not which block or which
+ * field — while `response_metadata.messages` says exactly that. Discarding it
+ * turns a one-line fix into guesswork, which is what happened here.
+ */
+function describeSlackError(body: Record<string, unknown>): string {
+  const code = String(body.error ?? "unknown");
+
+  const details = [
+    ...((body.errors as string[] | undefined) ?? []),
+    ...(((body.response_metadata as { messages?: string[] } | undefined)?.messages) ?? []),
+  ];
+
+  return details.length === 0 ? code : `${code} — ${details.join("; ")}`;
 }
 
 export function createSlackClient(options: SlackClientOptions): SlackClient {

@@ -130,104 +130,108 @@ export async function runVerificationProbes(
     failures.push(`3 · file upload — ${(error as Error).message}`);
   }
 
-  // F8.6 — can several images live in ONE message, each with its own buttons?
-  // This is the shape the batched review needs.
+  // F8.6 — can several images share ONE message, each with its own buttons?
   //
-  // Deliberately two separate messages, one per reference form. The first
-  // attempt combined them, one block was malformed, and Slack rejected the
-  // whole message — so the form that would have worked never rendered and the
-  // probe answered nothing. A probe that can fail as a unit is not a probe.
-  const byId = await probeImagesInOneMessage(slack, doFetch, input.channel, "id");
-  (byId.ok ? posted : failures).push(`4a · two images in one message, by file id${byId.detail}`);
+  // Two attempts at this already failed with a bare `invalid_blocks`, so this
+  // version bisects instead of guessing: four variants, smallest first, each
+  // in its own message. Whichever is the first to fail localises the problem
+  // to one field.
+  const photo = await fetchBytes(doFetch, SAMPLE_PHOTO, "probe4_a.jpg");
+  const photo2 = await fetchBytes(doFetch, SAMPLE_PHOTO_2, "probe4_b.jpg");
 
-  const byUrl = await probeImagesInOneMessage(slack, doFetch, input.channel, "url");
-  (byUrl.ok ? posted : failures).push(`4b · two images in one message, by private url${byUrl.detail}`);
+  const upload = async (bytes: Buffer, filename: string) => {
+    const { fileId } = await slack.uploadImage({ filename, title: filename, bytes });
+    return fileId;
+  };
 
-  return { posted, failures };
-}
+  // 4a — the simplest possible image block, pointing at a public URL. If this
+  // fails, image blocks are not the problem's cause and something more basic
+  // is wrong.
+  await attempt(slack, input.channel, posted, failures, "4a · one image, public URL", [
+    {
+      type: "image",
+      image_url: SAMPLE_PHOTO,
+      alt_text: "A product photo",
+    },
+  ]);
 
-/**
- * Posts one message holding two images with a button under each, referencing
- * the files either by id or by private url.
- */
-async function probeImagesInOneMessage(
-  slack: SlackClient,
-  doFetch: typeof fetch,
-  channel: string,
-  form: "id" | "url",
-): Promise<{ ok: boolean; detail: string }> {
+  // 4b — the same block, referencing a Slack-hosted file by id.
   try {
-    const uploads = await Promise.all([
-      uploadPrivately(slack, doFetch, SAMPLE_PHOTO, `probe4${form}_a.jpg`),
-      uploadPrivately(slack, doFetch, SAMPLE_PHOTO_2, `probe4${form}_b.jpg`),
+    const fileId = await upload(photo, "probe4b.jpg");
+    await attempt(slack, input.channel, posted, failures, "4b · one image, slack_file by id", [
+      { type: "image", slack_file: { id: fileId }, alt_text: "A product photo" },
     ]);
+  } catch (error) {
+    failures.push(`4b · one image, slack_file by id — ${(error as Error).message}`);
+  }
 
-    const references: Array<Record<string, string>> = [];
-    for (const upload of uploads) {
-      if (form === "id") {
-        references.push({ id: upload.fileId });
-        continue;
-      }
-      const url = await slack.getFileUrl(upload.fileId);
-      // Never emit a half-built block: Slack rejects the entire message, and
-      // the failure names the message rather than the field.
-      if (!url) throw new Error("files.info returned no url_private");
-      references.push({ url });
-    }
+  // 4c — the same block, referencing that file by its private url.
+  try {
+    const fileId = await upload(photo, "probe4c.jpg");
+    const url = await slack.getFileUrl(fileId);
+    if (!url) throw new Error("files.info returned no url_private");
+    await attempt(slack, input.channel, posted, failures, "4c · one image, slack_file by url", [
+      { type: "image", slack_file: { url }, alt_text: "A product photo" },
+    ]);
+  } catch (error) {
+    failures.push(`4c · one image, slack_file by url — ${(error as Error).message}`);
+  }
 
-    const blocks: Block[] = [
+  // 4d — the actual target shape: two images in one message, a button under
+  // each, using public URLs. Our own /img endpoint serves images publicly, so
+  // this form is available to the real thing if the slack_file forms are not.
+  void photo2;
+  await attempt(
+    slack,
+    input.channel,
+    posted,
+    failures,
+    "4d · two images with their own buttons, public URLs",
+    [
       {
         type: "section",
         text: {
           type: "mrkdwn",
-          text:
-            `*Probe 4${form === "id" ? "a" : "b"} · two images in one message ` +
-            `(by file ${form})*\nBoth images should appear, each with its own ` +
-            `button directly underneath.`,
+          text: "*Probe 4d · the shape a batched review would take*",
         },
       },
-    ];
+      { type: "image", image_url: SAMPLE_PHOTO, alt_text: "First candidate" },
+      ...probeButtons("probe-4d-1"),
+      { type: "image", image_url: SAMPLE_PHOTO_2, alt_text: "Second candidate" },
+      ...probeButtons("probe-4d-2"),
+    ],
+  );
 
-    references.forEach((reference, index) => {
-      blocks.push({
-        type: "image",
-        alt_text: `Probe image ${index + 1}`,
-        title: { type: "plain_text", text: `Image ${index + 1}` },
-        slack_file: reference,
-      });
-      blocks.push(...probeButtons(`probe-4${form}-${index + 1}`));
-    });
+  return { posted, failures };
+}
 
-    await slack.postMessage({
-      channel,
-      text: `Probe 4${form === "id" ? "a" : "b"} — two images in one message.`,
-      blocks,
-    });
-
-    return { ok: true, detail: "" };
+/** Posts one message and records which way it went, with Slack's own detail. */
+async function attempt(
+  slack: SlackClient,
+  channel: string,
+  posted: string[],
+  failures: string[],
+  label: string,
+  blocks: Block[],
+): Promise<void> {
+  try {
+    await slack.postMessage({ channel, text: `Probe ${label}`, blocks });
+    posted.push(label);
   } catch (error) {
-    return { ok: false, detail: ` — ${(error as Error).message}` };
+    failures.push(`${label} — ${(error as Error).message}`);
   }
 }
 
-/** Uploads to Slack without sharing it anywhere. */
-async function uploadPrivately(
-  slack: SlackClient,
+async function fetchBytes(
   doFetch: typeof fetch,
-  photoUrl: string,
+  url: string,
   filename: string,
-): Promise<{ fileId: string }> {
-  const response = await doFetch(photoUrl);
+): Promise<Buffer> {
+  const response = await doFetch(url);
   if (!response.ok) {
     throw new Error(`could not fetch ${filename}: HTTP ${response.status}`);
   }
-  const bytes = Buffer.from(await response.arrayBuffer());
-  const { fileId } = await slack.uploadImage({
-    filename,
-    title: filename,
-    bytes,
-  });
-  return { fileId };
+  return Buffer.from(await response.arrayBuffer());
 }
 
 export function summariseReport(report: VerifyReport): string {
@@ -239,10 +243,9 @@ export function summariseReport(report: VerifyReport): string {
     "Now go and look at the channel. What you're checking:",
     "• Probes 1 and 3: do the buttons appear, and does tapping one change the message?",
     "• Probe 2: mute the channel, re-run, and see whether the mention still badges.",
-    "• Probes 4a and 4b: each is a separate message trying a different way of " +
-      "referencing the files. Whichever one renders both images, with a button " +
-      "under each, is the form the batched review will use. Either working is " +
-      "enough.",
+    "• Probes 4a to 4d: four ways of putting an image in a message, smallest " +
+      "first. The first one that fails localises the problem. 4d is the shape " +
+      "the batched review would actually take.",
   );
   return lines.join("\n");
 }
