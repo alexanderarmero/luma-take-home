@@ -67,3 +67,20 @@ export function createFakeSlack(): FakeSlack {
 
   return fake;
 }
+
+/**
+ * Filenames of the image blocks in a posted message, in order.
+ *
+ * Images now ride inside a product's message rather than being uploaded one
+ * per post, so tests read them from the blocks.
+ */
+export function imageFilenames(post: { blocks?: unknown[] }): string[] {
+  return ((post.blocks ?? []) as Array<Record<string, unknown>>)
+    .filter((b) => b.type === "image")
+    .map((b) => String((b.title as { text?: string } | undefined)?.text ?? ""));
+}
+
+/** Every image filename across every posted message, in posting order. */
+export function allImageFilenames(posts: Array<{ blocks?: unknown[] }>): string[] {
+  return posts.flatMap(imageFilenames);
+}

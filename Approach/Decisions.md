@@ -1158,3 +1158,45 @@ means A2.3's contradiction (delegated rights vs. Ellie's final word) never arise
 still participate fully**: they discuss in per-image threads (D3.4), which is precisely what
 brief step 5 shows them doing. **Nothing is taken away from the team; the decision simply
 stays where it already is.**
+
+---
+
+## D38 — One message per product, images referenced from our own endpoint
+
+**Settled:** 2026-09-05, after probe 4. **Revises D3.1 and reverses D32.**
+
+| Sub-decision | Ruling |
+|---|---|
+| **D38.1** | **One Slack message per product**, carrying every candidate that survived, each with its own Approve and Discard directly beneath it. |
+| **D38.2** | Images are `image` blocks pointing at our own `/img/:id` endpoint — **not** files uploaded into Slack. |
+| **D38.3** | A candidate that failed is **named in the message** with the reason, rather than silently absent. |
+| **D38.4** | A pass-through gets its own message stating plainly that the photo is the original and was not changed. |
+
+**Why the reversal was forced.** F12 measured it: an `image` block cannot
+reference a Slack-hosted file that was never shared to a channel — by id or by
+private url, both rejected as `invalid slack file`. Sharing the file first
+creates the very message we are trying to replace. So the only working path to
+"several images in one message, each with its own decision" is a public URL,
+which we already serve.
+
+**What reversing D32 actually costs.** D32 kept bytes in Slack so the channel —
+the permanent record — would not break if our storage did. But **D2.6 already
+establishes that Slack is the interface and never the datastore**: decisions
+live in Postgres, images live in the bucket under a checksum. A storage outage
+therefore breaks the *rendering* of a channel, not the *record* of anything,
+and the bytes remain available to re-post from. D32 was protecting convenience
+while reading as though it protected correctness.
+
+**The residual risk, stated plainly:** a channel of broken images looks alarming
+to a non-technical team even when nothing is lost, and it makes the product look
+unreliable exactly when it is under scrutiny. Watch for it; the mitigation if it
+ever bites is to re-post from the bucket.
+
+**What it buys beyond layout.** Message volume drops from 120 to 40 for the real
+catalog — a two-thirds cut in notification volume. Threads still hang off each
+product's message, so the discussion survives intact.
+
+**Note this beats both options from the original Q1b debate.** Threads were
+rejected because they lowered scroll cost but raised viewing cost — a tap per
+image. This lowers both: every candidate is visible without a tap, and the
+channel is a third of the length.
