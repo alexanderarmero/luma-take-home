@@ -223,6 +223,7 @@ oauth_config:
       - chat:write
       - files:write
       - files:read
+      - im:write
 settings:
 MANIFEST
   if [[ -n "$url" ]]; then

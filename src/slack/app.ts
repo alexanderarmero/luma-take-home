@@ -15,6 +15,15 @@ import {
 import type { SqlClient } from "../db/client.js";
 import { getImageByObjectKey } from "../db/repository.js";
 import { startBatchAndAnnounce } from "../generation/announce.js";
+import { runOneOff } from "../generation/oneoff.js";
+import {
+  buildOneOffModal,
+  ONEOFF_CALLBACK_ID,
+  ONEOFF_FILE_ACTION,
+  ONEOFF_FILE_BLOCK,
+  ONEOFF_PROMPT_ACTION,
+  ONEOFF_PROMPT_BLOCK,
+} from "../generation/oneoff-modal.js";
 import { regenerate } from "../generation/regenerate.js";
 import type { ImageGenerator } from "../generation/generator.js";
 import type { BrandContext } from "../generation/brand.js";
@@ -293,6 +302,33 @@ export function createApp(deps: AppDeps) {
         return c.body(null, 200);
       }
 
+      case "generate": {
+        const { slack } = deps;
+        const triggerId = params.get("trigger_id");
+        if (!slack || !triggerId || !deps.generator || !deps.store) {
+          return c.json(ephemeral("One-off shots aren't configured here."));
+        }
+        if (!deps.publicBaseUrl) {
+          return c.json(
+            ephemeral(
+              "I don't know my own public address, so Luma can't fetch the " +
+                "photo you upload. Set PUBLIC_BASE_URL.",
+            ),
+          );
+        }
+        // Same list as approving: this spends money, even if only a dime.
+        if (!(await canWrite(deps.db, userId, deps.approverUserId ?? ""))) {
+          return c.json(
+            ephemeral(
+              "Only people who can approve photos can generate them. Ask the " +
+                "approver to add you with `/luma access`.",
+            ),
+          );
+        }
+        await slack.openView({ triggerId, view: buildOneOffModal() });
+        return c.body(null, 200);
+      }
+
       case "system-prompt": {
         const { slack } = deps;
         const triggerId = params.get("trigger_id");
@@ -345,6 +381,33 @@ export function createApp(deps: AppDeps) {
         "content-type": object.contentType,
         "content-disposition": `inline; filename="${image.filename}"`,
         "cache-control": "public, max-age=31536000, immutable",
+      });
+    } catch {
+      return c.text("not found", 404);
+    }
+  });
+
+  /**
+   * A one-off source photograph, for Luma to fetch.
+   *
+   * Deliberately a separate namespace from `/img`: that route serves a
+   * batch's images and checks the database for one, this route serves scratch
+   * uploads and never touches it. Neither can reach the other's objects.
+   */
+  app.get("/src/:id", async (c) => {
+    if (!deps.store) return c.text("storage not configured", 503);
+
+    const id = c.req.param("id").replace(/\.jpg$/, "");
+    // The id is a random UUID minted by the store, and it is the only thing
+    // guarding the object — so it must not be built from anything a caller
+    // supplied.
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return c.text("not found", 404);
+
+    try {
+      const object = await deps.store.get(`scratch/${id}.jpg`);
+      return c.body(new Uint8Array(object.bytes), 200, {
+        "content-type": object.contentType,
+        "cache-control": "public, max-age=3600",
       });
     } catch {
       return c.text("not found", 404);
@@ -570,6 +633,60 @@ export function createApp(deps: AppDeps) {
             addUserIds: added,
           });
         });
+        return c.body(null, 200);
+      }
+
+      if (payload.view?.callback_id === ONEOFF_CALLBACK_ID) {
+        const values = payload.view?.state?.values;
+        const file = values?.[ONEOFF_FILE_BLOCK]?.[ONEOFF_FILE_ACTION]?.files?.[0];
+        const prompt =
+          values?.[ONEOFF_PROMPT_BLOCK]?.[ONEOFF_PROMPT_ACTION]?.value ?? "";
+
+        const { slack, generator, store, publicBaseUrl } = deps;
+        if (!slack || !generator || !store || !publicBaseUrl) {
+          return c.body(null, 200);
+        }
+
+        // Re-checked here rather than trusted from the modal being open: the
+        // view outlives the permission that opened it.
+        if (!(await canWrite(deps.db, userId ?? "", deps.approverUserId ?? ""))) {
+          return c.json({
+            response_action: "errors",
+            errors: {
+              [ONEOFF_PROMPT_BLOCK]: "You no longer have access to generate photos.",
+            },
+          });
+        }
+        if (!file?.url_private) {
+          return c.json({
+            response_action: "errors",
+            errors: { [ONEOFF_FILE_BLOCK]: "I couldn't read that file." },
+          });
+        }
+
+        const url = file.url_private;
+        const name = file.name ?? "photo.jpg";
+        const asker = userId ?? "";
+
+        // Generation outlasts the modal by a long way, so the answer goes to
+        // a conversation rather than to this view.
+        deps.defer(async () => {
+          await runOneOff({
+            slack,
+            store,
+            generator,
+            userId: asker,
+            fileUrl: url,
+            filename: name,
+            prompt,
+            model: deps.model ?? "uni-1-max",
+            aspectRatio: deps.aspectRatio ?? "1:1",
+            publicBaseUrl,
+            ...(deps.fetch ? { fetch: deps.fetch } : {}),
+            log: (message) => console.log(message),
+          });
+        });
+
         return c.body(null, 200);
       }
 

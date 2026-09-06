@@ -1427,3 +1427,25 @@ batch.
 The slot is allocated under a row lock so they cannot collide, but neither is
 told the other is doing it. They get four candidates instead of three, which is
 the harmless version of that race.
+
+---
+
+## T18 — Cost of D50 (one-off shots)
+
+**T18.1 — It does not survive a restart.** The one-off polls inside a deferred
+task, so a deploy mid-generation loses the watcher and the asker gets nothing.
+The batch path was deliberately built the other way — state in the database,
+resumed by a loop — and this deliberately was not, because a one-off has no
+value once its asker has moved on. The cost is a rare silent failure, and it is
+the one place in the system where "it just never answered" is possible.
+
+**T18.2 — Scratch uploads are never cleaned up.** Every one-off leaves its
+source photo in the bucket forever. At a dime a shot and a handful of tries a
+week this is invisible; it is still an unbounded set with no owner. A lifecycle
+rule on the `scratch/` prefix is the fix, and the prefix exists partly so that
+rule is one line when it is wanted.
+
+**T18.3 — Spend here is invisible.** One-offs are not counted in any batch's
+cost, do not appear in `/luma status`, and are announced to nobody. That is the
+right call for a private try-out and the wrong one if it ever becomes a habit —
+the first sign of trouble would be a Luma bill nobody can attribute.

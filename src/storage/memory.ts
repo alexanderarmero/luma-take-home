@@ -12,8 +12,13 @@ export function createMemoryStore(): MemoryStore {
 
   return {
     objects,
-    async put({ bytes, contentType, filename }: PutInput): Promise<StoredObject> {
-      const key = `images/${randomUUID()}.jpg`;
+    async put({
+      bytes,
+      contentType,
+      filename,
+      prefix = "images",
+    }: PutInput): Promise<StoredObject> {
+      const key = `${prefix}/${randomUUID()}.jpg`;
       objects.set(key, { bytes, contentType, filename });
       return {
         key,

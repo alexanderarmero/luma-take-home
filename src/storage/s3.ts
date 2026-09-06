@@ -44,8 +44,13 @@ export function createS3ObjectStore(options: S3StoreOptions): ObjectStore {
     });
 
   return {
-    async put({ bytes, contentType, filename }: PutInput): Promise<StoredObject> {
-      const key = `images/${randomUUID()}.jpg`;
+    async put({
+      bytes,
+      contentType,
+      filename,
+      prefix = "images",
+    }: PutInput): Promise<StoredObject> {
+      const key = `${prefix}/${randomUUID()}.jpg`;
 
       await client.send(
         new PutObjectCommand({
