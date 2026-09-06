@@ -220,6 +220,38 @@ describe("submitting the catalog", () => {
     expect(view.private_metadata).toBe(String(batch!.id));
   });
 
+  it("splits a recap too long for one Slack section", async () => {
+    // Slack refuses a section of 3000 characters or more and rejects the
+    // whole view — so a file dirty enough to need explaining is exactly the
+    // file whose explanation fails to render.
+    const header =
+      "SKU,Product Name,Category,Color / Finish,Material,Price,Photo,Shot Idea,Notes";
+    const good = Array.from(
+      { length: 3 },
+      (_, i) =>
+        `HG-1${i},Mug ${i},Ceramics,Sage,Stoneware,$28,https://x.test/a.jpg,kitchen,`,
+    );
+    // Eighty rows with no Photo link: each one earns its own warning line.
+    const bad = Array.from(
+      { length: 80 },
+      (_, i) => `HG-9${i},Vase ${i},Ceramics,Sage,Stoneware,$48,,,`,
+    );
+    slack.files.set(FILE_URL, [header, ...good, ...bad].join("\n"));
+
+    await app().request(viewSubmission());
+    await drain();
+
+    const blocks = currentView()!.blocks as Array<{
+      text?: { text?: string };
+    }>;
+    expect(blocks.length).toBeGreaterThan(1);
+    for (const block of blocks) {
+      expect((block.text?.text ?? "").length).toBeLessThan(3000);
+    }
+    // Split, not truncated: the last skipped row is still named.
+    expect(JSON.stringify(blocks)).toContain("HG-979");
+  });
+
   it("spends nothing", async () => {
     await app().request(viewSubmission());
     await drain();

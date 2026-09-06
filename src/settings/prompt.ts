@@ -3,8 +3,16 @@ import { DEFAULT_DIRECTION } from "../generation/brand.js";
 
 const KEY = "prompt_direction";
 
-/** The longest an override may be, in characters. */
-export const MAX_DIRECTION_LENGTH = 4000;
+/**
+ * The longest an override may be, in characters.
+ *
+ * Bounded from two directions. Slack refuses a `plain_text_input` whose
+ * `max_length` is 3000 or more, and the modal is the only way to set this — so
+ * the ceiling is Slack's, not ours. Well clear of it, because the built-in
+ * wording is under 800 characters and anything approaching this is being
+ * carried on every prompt call.
+ */
+export const MAX_DIRECTION_LENGTH = 2500;
 
 export interface PromptDirection {
   text: string;

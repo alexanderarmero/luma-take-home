@@ -76,6 +76,42 @@ export function buildCheckingModal(externalId: string): Record<string, unknown> 
   };
 }
 
+/** Slack refuses a section whose text is 3000 characters or more. */
+const MAX_SECTION_TEXT = 2900;
+
+/**
+ * One section per chunk, split on line boundaries.
+ *
+ * A recap is short for a clean file and long for a dirty one — 1,100
+ * characters for the sample catalog, past 3,000 once forty rows have been
+ * skipped. Slack rejects the whole view in that case, so the message that
+ * explains what is wrong with your file is exactly the message that fails to
+ * render. Splitting is the fix; truncating would drop the rows the reader
+ * most needs to see.
+ */
+function textSections(text: string): Array<Record<string, unknown>> {
+  const chunks: string[] = [];
+  let current = "";
+
+  for (const line of text.split("\n")) {
+    // A single line longer than the limit is not something this produces, but
+    // it must not silently vanish if it ever does.
+    const candidate = current === "" ? line : `${current}\n${line}`;
+    if (candidate.length > MAX_SECTION_TEXT && current !== "") {
+      chunks.push(current);
+      current = line;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current !== "") chunks.push(current);
+
+  return chunks.map((chunk) => ({
+    type: "section",
+    text: { type: "mrkdwn", text: chunk.slice(0, MAX_SECTION_TEXT) },
+  }));
+}
+
 /**
  * The recap, as the second step of the upload rather than a channel message.
  *
@@ -97,7 +133,7 @@ export function buildRecapModal(
     title: { type: "plain_text", text: "Ready to generate" },
     submit: { type: "plain_text", text: "Generate" },
     close: { type: "plain_text", text: "Cancel" },
-    blocks: [{ type: "section", text: { type: "mrkdwn", text } }],
+    blocks: textSections(text),
   };
 }
 
@@ -111,7 +147,7 @@ export function buildIngestErrorModal(
     external_id: externalId,
     title: { type: "plain_text", text: "I can't use this file" },
     close: { type: "plain_text", text: "Close" },
-    blocks: [{ type: "section", text: { type: "mrkdwn", text } }],
+    blocks: textSections(text),
   };
 }
 
