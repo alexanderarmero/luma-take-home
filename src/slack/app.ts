@@ -13,11 +13,7 @@ import {
   UPLOAD_CALLBACK_ID,
 } from "../catalog/ingest.js";
 import type { SqlClient } from "../db/client.js";
-import {
-  getImageByObjectKey,
-  getIntroMessageTs,
-  retryFailedImage,
-} from "../db/repository.js";
+import { getImageByObjectKey, retryFailedImage } from "../db/repository.js";
 import { startBatchAndAnnounce } from "../generation/announce.js";
 import { runOneOff } from "../generation/oneoff.js";
 import {
@@ -594,16 +590,6 @@ export function createApp(deps: AppDeps) {
     if (deps.slack && deps.reviewChannelId) {
       const { slack, reviewChannelId } = deps;
       deps.defer(async () => {
-        // The batch is finished, so its opening message stops being the thing
-        // people need to hand. Leaving it pinned would mean the channel's
-        // pins slowly become a list of everything that ever happened.
-        const introTs = await getIntroMessageTs(deps.db, outcome.batchId);
-        if (introTs) {
-          await slack
-            .unpinMessage({ channel: reviewChannelId, ts: introTs })
-            .catch(() => {});
-        }
-
         await slack.postMessage({
           channel: reviewChannelId,
           text:
