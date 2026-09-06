@@ -675,6 +675,14 @@ export interface ProductImage {
   objectKey: string | null;
   jobState: JobState;
   failureCode: string | null;
+  /**
+   * What actually went wrong, when there is no Luma failure code to explain it.
+   *
+   * A pass-through never reaches Luma, so its failures are ours — a download
+   * or a write — and without this they are indistinguishable from a silent
+   * refusal by the model.
+   */
+  lastError?: string | null;
 }
 
 /**
@@ -698,12 +706,13 @@ export async function getProductImages(
     object_key: string | null;
     state: JobState;
     failure_code: string | null;
+    last_error: string | null;
     product_name: string;
     shot_idea: string | null;
     decision: string | null;
   }>(
     `select i.id as image_id, i.slot, i.filename, i.prompt, i.kind,
-            i.object_key, j.state, j.failure_code,
+            i.object_key, j.state, j.failure_code, j.last_error,
             i.product_name, r.shot_idea,
             case
               when a.image_id is not null then 'approved'
@@ -732,6 +741,7 @@ export async function getProductImages(
       objectKey: r.object_key,
       jobState: r.state,
       failureCode: r.failure_code,
+      lastError: r.last_error,
       decision: (r.decision as "approved" | "discarded" | null) ?? null,
     })),
   };

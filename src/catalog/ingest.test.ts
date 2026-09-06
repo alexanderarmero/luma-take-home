@@ -433,6 +433,18 @@ describe("the Generate button", () => {
     expect(second).toMatch(/about \d+ minutes/);
   });
 
+  it("tells people how to get the ability to decide, while there is time", async () => {
+    // Signing in takes a moment, and the moment to spend it is while the
+    // photographs are being made — not when someone finally sits down to
+    // decide and finds they cannot.
+    await uploadThenPressGenerate();
+    await drain();
+
+    const first = slack.posts[0]!.text;
+    expect(first).toContain("/luma signin");
+    expect(first).toContain("anyone can open the overview");
+  });
+
   it("says publicly what the batch costs", async () => {
     // The recap that used to carry this is now private to the uploader, but
     // the spend is still the team's business.

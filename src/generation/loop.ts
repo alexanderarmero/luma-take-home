@@ -52,7 +52,7 @@ export async function tick(deps: WorkerDeps, options: LoopOptions = {}): Promise
     if (outcome.failed > 0) {
       lines.push(
         "",
-        `*${outcome.failed}* couldn't be generated and aren't above. ` +
+        `*${outcome.failed}* didn't arrive and aren't above. ` +
           "Run `/luma status` to see which products came up short.",
       );
     }

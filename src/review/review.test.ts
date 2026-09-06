@@ -232,6 +232,57 @@ describe("review page", () => {
     expect(after).toContain("setInterval(refresh, 15000)");
   });
 
+  it("offers a filter for every outcome, counted", async () => {
+    const batch = await seed([
+      { sku: "HG-002", shotIdea: "kitchen" },
+      { sku: "HG-003", shotIdea: null },
+    ]);
+    const token = await ensureReviewToken(db, batch.id);
+    await runPipeline(batch.id);
+
+    const html = renderReviewPage((await buildReviewState(db, token))!, token);
+
+    for (const filter of ["all", "ready", "approved", "discarded", "passthrough", "failed"]) {
+      expect(html).toContain(`data-filter="${filter}"`);
+    }
+    expect(html).toContain("No shot idea");
+    expect(html).toContain("Didn't arrive");
+  });
+
+  it("disables a filter that would show nothing", async () => {
+    // Shown at zero rather than hidden: a chip that appears and disappears as
+    // decisions land is a moving target to aim at.
+    const batch = await seed([{ sku: "HG-002", shotIdea: "kitchen" }]);
+    const token = await ensureReviewToken(db, batch.id);
+    await runPipeline(batch.id);
+
+    const html = renderReviewPage((await buildReviewState(db, token))!, token);
+    expect(html).toMatch(/data-filter="approved" disabled/);
+    expect(html).not.toMatch(/data-filter="ready" disabled/);
+  });
+
+  it("labels each photo with what it is, so filtering has something to read", async () => {
+    const batch = await seed([{ sku: "HG-003", shotIdea: null }]);
+    const token = await ensureReviewToken(db, batch.id);
+    await runPipeline(batch.id);
+
+    const html = renderReviewPage((await buildReviewState(db, token))!, token);
+    expect(html).toContain('data-passthrough="1"');
+    expect(html).toContain('data-state="ready"');
+  });
+
+  it("counts the pass-throughs it offers to filter by", async () => {
+    const batch = await seed([
+      { sku: "HG-002", shotIdea: "kitchen" },
+      { sku: "HG-003", shotIdea: null },
+      { sku: "HG-004", shotIdea: null },
+    ]);
+    const token = await ensureReviewToken(db, batch.id);
+    await runPipeline(batch.id);
+
+    expect((await buildReviewState(db, token))!.totals.passThrough).toBe(2);
+  });
+
   it("carries no external stylesheet, script or font", async () => {
     // It has to render on a phone with nothing but the images to fetch.
     const batch = await seed([{ sku: "HG-002", shotIdea: "kitchen" }]);

@@ -73,6 +73,14 @@ export async function startBatchAndAnnounce(input: AnnounceInput): Promise<void>
         "You don't need to wait here — I'll mention you once the whole batch " +
           "is ready to review.",
         ...(overviewUrl ? ["", `*Overview page:* ${overviewUrl}`] : []),
+        "",
+        // Said now rather than at the end: signing in takes a moment and the
+        // moment to spend it is while the photographs are being made, not
+        // when someone is finally sitting down to decide.
+        "*Before you can approve anything, run `/luma signin`.* It sends you " +
+          "a private link that lasts a day — anyone can open the overview " +
+          "page and look, but deciding needs that sign-in. Do it now and it " +
+          "will be ready when the photos are.",
       ].join("\n"),
     });
 

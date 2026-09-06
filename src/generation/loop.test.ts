@@ -151,7 +151,7 @@ describe("tick", () => {
     // Says how many never arrived. A missing photo is otherwise
     // indistinguishable from one still on its way.
     expect(announcement!.text).toContain("3");
-    expect(announcement!.text.toLowerCase()).toContain("couldn't be generated");
+    expect(announcement!.text.toLowerCase()).toContain("didn't arrive");
   });
 
   it("points the summons at the page where deciding happens", async () => {
@@ -177,6 +177,6 @@ describe("tick", () => {
     await seedBatch([{ sku: "HG-002", shotIdea: "kitchen" }]);
     await tick(deps(), { approverUserId: "U_ELLIE" });
     const announcement = slack.posts.find((p) => p.text.includes("ready for review"));
-    expect(announcement!.text.toLowerCase()).not.toContain("couldn't be generated");
+    expect(announcement!.text.toLowerCase()).not.toContain("didn't arrive");
   });
 });

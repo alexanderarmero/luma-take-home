@@ -71,7 +71,7 @@ export async function buildStatusSummary(input: StatusInput): Promise<string> {
   const lines: string[] = [
     `*Batch #${batch.id}* — \`${batch.sourceFilename}\``,
     `${approved} approved · ${discarded} discarded · ${pending} still to review` +
-      (outcome.failed > 0 ? ` · ${outcome.failed} couldn't be generated` : ""),
+      (outcome.failed > 0 ? ` · ${outcome.failed} didn't arrive` : ""),
     `$${spent.toFixed(2)} spent`,
   ];
 

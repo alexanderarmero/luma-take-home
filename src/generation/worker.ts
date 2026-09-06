@@ -232,7 +232,7 @@ export async function runOnce(
           await deps.slack.postMessage({
             channel: deps.channel,
             threadTs,
-            text: `${failed.length} of ${product.images.length} couldn't be generated`,
+            text: `${failed.length} of ${product.images.length} didn't arrive`,
             blocks: buildFailureNote(failed, product.images.length),
           });
         }
