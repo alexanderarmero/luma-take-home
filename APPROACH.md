@@ -9,7 +9,9 @@
 
 ## What I'm building, and why
 
-**A Slack app. That's the whole product — there is no dashboard, no web app, no login.**
+**A Slack app, with one page hanging off it. Almost the whole product is Slack; the single
+exception is the page where photographs are compared, and it is linked to, never navigated
+to.**
 
 Maya's team told me exactly what they rejected: *"Last quarter they trialed a
 creative-automation tool with a beautiful dashboard. Nobody logged in after week one."*
@@ -23,14 +25,22 @@ process is literally *"Ellie forwards her favorites into Slack for opinions."*
 
 So the design rule is: **the work comes to Ellie, and nothing new gets installed.**
 
+That rule survived contact with the build; the "no web page at all" corollary did not. The
+distinction turned out to be the load-bearing one: a dashboard fails because it requires
+*pull*. A link that arrives in the message telling you your photographs are ready is still
+push — it is the notification that does the remembering, not the person. Nothing is
+installed, nothing is logged into daily, and the page cannot be reached without Slack
+handing you the link. See revision notes on decisions 1 and 2.
+
 ### The loop
 
 1. **Upload** — a slash command opens a modal, drop the CSV in. It never touches the review channel.
 2. **Recap** — the system validates and reports back: *"40 rows, 16 with shot ideas, 24 without, 48 images ≈ $4.94."* **Nothing has been spent yet.** One button starts the batch.
 3. **Generate** — each shot idea becomes 2–3 *distinct* prompts via Claude, rendered against the product's own white-background photo. Rows with no shot idea pass their original photo through untouched, for free.
-4. **Review** — one Slack message per image: the photo, its filename, the prompt that made it, and Approve / Discard. Each has its own thread, so *"no, too staged"* lands on the image it's about.
-5. **Confirm** — when every image has a yes or a no, the batch auto-completes and a confirm button appears. Confirming freezes it.
-6. **Deliver** — the web person runs one command and gets a zip. Every file named `HG-002_morning-kitchen_01.jpg`. No asking Slack which ones are final.
+4. **Review** — one line per product in the channel, its three candidates posted into that product's thread, and a link to the overview page anchored at that product. The page shows a product's shots side by side, which is the shape of the decision; the thread is where *"no, too staged"* lands on the shot it is about. Approving and discarding happen on the page, behind a session (`/luma signin`).
+5. **Reshoot, if none of them are right** — "Ask for another" takes a prompt you write yourself and makes one more, appended to the product and posted into its thread. Nothing is replaced.
+6. **Confirm** — when every image has a yes or a no, a confirm panel appears on the page. It takes two taps and freezes the batch.
+7. **Deliver** — the web person runs one command and gets a zip. Every file named `HG-002_morning-kitchen_01.jpg`. No asking Slack which ones are final.
 
 ### What this actually fixes
 
@@ -46,7 +56,7 @@ design targets both, but it treats the second as the harder problem — because 
 
 ## Key decisions and tradeoffs
 
-### 1. All-in-Slack — no web app, not even for approval
+### 1. All-in-Slack — no web app, not even for approval → **reversed**
 
 I first designed a hybrid: Slack notifies, a magic link opens a mobile review page. I
 abandoned it.
@@ -61,7 +71,22 @@ scrolling. At 120 images that's real, and it's the thing most likely to need rev
 The hybrid is fully specified and remains the named pivot — and the expensive half of the
 system (pipeline, storage, prompts, ingest) survives that move untouched.
 
-### 2. One flat message per image, not threads
+> **Revised after building it.** I took the named pivot. Approve, discard and confirm now
+> live on the overview page; Slack keeps the photographs, the threads and every
+> notification. The cost above is what forced it: **approving shot 2 of 3 is a comparison,
+> not a verdict**, and Slack renders three candidates as three file shares you scroll
+> between. The page puts them side by side, which is the shape of the decision actually
+> being made.
+>
+> The prediction held — the expensive half survived untouched. Pipeline, storage, prompts
+> and ingest needed no change; what moved was where the buttons are drawn.
+>
+> What I got wrong was calling identity "free". It was free *until* deciding left Slack,
+> and then it cost a magic link, a session and an access list — about a day's work. That
+> is a fair price for the comparison view, but it was a real cost hidden inside a
+> decision I had described as costless. See D41–D43.
+
+### 2. One flat message per image, not threads → **reversed**
 
 Threads would collapse the channel from 120 messages to 40. I recommended them. **The
 counter-argument won: threads reduce scroll cost but raise viewing cost.** A thread parent
@@ -76,6 +101,19 @@ That's a direct countermeasure to the pick living wherever the conversation happ
 Mitigated by a single @-mention on the batch summary with the stream posted quietly — and
 noted as the sharpest un-mitigated risk, because **if Ellie mutes the channel, every push
 property that justified this design evaporates.**
+
+> **Revised after building it.** The channel is now one line per *product*, with that
+> product's three candidates posted into its thread.
+>
+> The tap-cost argument was sound and is now paid somewhere else: seeing the photographs
+> means opening the page, once, rather than tapping 120 times. Once deciding moved off
+> Slack (§1) the flat stream had no job left — it was carrying buttons that no longer
+> existed, at the price of 120 messages.
+>
+> The filing property survived intact, and is the reason threads came back rather than
+> disappearing: every comment about a shot still lands under that shot. The page links
+> into each product's thread and each product's line links back into the page, so
+> *"where was that decided?"* still has a mechanical answer. See D39, D41.
 
 ### 3. Approval integrity is inviolable
 
@@ -185,7 +223,9 @@ prompt translation and ingest all move over unchanged; only the presentation lay
 | CSV ingest via slash command + modal | Keeps ingest off the review stream; stays inside Slack |
 | Validate → recap → Generate button | The budget answer, and what makes it safe to aim at 300 rows |
 | Generation pipeline (submit → poll → download → store) | The product |
-| Flat image messages with Approve / Discard | The product |
+| One channel line per product, photographs in its thread | The product |
+| Overview page: every candidate for a product side by side | Where approving and discarding actually happen |
+| Magic-link sign-in, 24h sessions, an access list | The price of moving decisions off Slack |
 | Auto-completion + confirm | Turns "12 approved" into "we're finished" — the thing nobody can answer today |
 | Zip export by command | The web person's entire job; delivery doesn't exist without it |
 | Deterministic filenames end-to-end | The direct fix for the named disaster |
@@ -199,16 +239,35 @@ prompt translation and ingest all move over unchanged; only the presentation lay
 | Writing to Google Drive | **The folder is the bug, not the goal.** No naming, no index, no way to tell shipped from unshipped — and step 7 admits the web person already doesn't trust it. Writing to it creates a *second* place claiming to know what's final, inside a system whose defining problem is disagreement about what's final. Kept in the architecture as a write-only mirror; not built. |
 | Multi-product grouped shots | `El: shoot with the mugs maybe`, `bathroom set w/ the towels?` — **Ellie has already asked for something this can't do.** Needs multiple sources composited into one scene and a grouping concept the CSV has no column for. Named rather than half-built. |
 | LLM-authored shot ideas | Cut on time. See *Next* — it's the highest-value item there. |
-| Permissions management command | Ellie's ID is hardcoded. At six people an allowlist in config may be permanently correct. |
+| Prompt versioning per image | The editable system prompt shipped without it. Nothing records *which* wording a given photo was made from. See *Next*. |
+| A ceiling on reshoots | Nothing caps how many times a shot can be re-asked. Hand-typed one at a time is real friction but not a budget. |
 | Multi-format output (social / banner ratios) | Competes with creative variety for the same three candidate slots. Variety wins; formats are addable later. |
+
+### Built after v1
+
+| Item | Where it landed |
+|---|---|
+| Every write on the page, behind a signed-in session | D41–D43 |
+| Ingest recap as a modal step; cost announced in the channel | D44–D46 |
+| Editable system prompt (`/luma system-prompt`) | D47 |
+| Reshoot: one manual shot, appended (`Ask for another`) | D48/D49 |
+| One-off try-outs (`/luma generate`) | D50 |
+| Access management (`/luma access`) | D42 |
 
 ### Next, in priority order
 
-1. **Regeneration with an editable prompt.** Fully specified, cut for scope. v1 has no answer to three wrong candidates except "discard all three and re-upload." *Signal it's needed:* count products finishing with fewer than two approvals on the first real batch.
+1. **Prompt versioning on every image.** The system prompt is now editable, which means
+   "what wording produced this photo?" has become a question the system cannot answer.
+   The fix is to stamp the direction onto the batch at generation time. **This is the debt
+   that shipping D47 created**, and it comes first for that reason.
 2. **LLM-proposed shot ideas for blank rows.** **v1 automates the photographer; it does not automate Ellie reconstructing the wishlist from the sheet, Slack scrollback, and her inbox.** With 24 of 40 rows blank today and the drop likely emptier still, this is cut *by risk and sequencing, not by value.*
-3. **An editable brand system prompt**, so the team maintains look and feel themselves. Requires prompt versioning on every image — anything that can change must be identifiable.
-4. **Drive write-only mirror**, if the team's habit proves immovable.
-5. **Attention-side scaling** — bulk actions, auto-approving pass-throughs. See *what breaks first*.
+3. **Attention-side scaling** — bulk actions, auto-approving pass-throughs. Now the sharpest
+   limit: the page makes comparison cheap, which makes the number of comparisons the wall.
+   See *what breaks first*.
+4. **A spend ceiling.** Reshoots and one-offs are both uncapped and one-off spend appears in
+   no report at all. Invisible at today's volume; the first sign of trouble would be a bill
+   nobody can attribute.
+5. **Drive write-only mirror**, if the team's habit proves immovable.
 
 ---
 
@@ -249,16 +308,23 @@ Every architectural choice here is cheap to scale — Postgres, object storage, 
 adaptive rate limiting against a sliding window. **What doesn't scale is the single human in
 the approval path.** The rule that every image gets a yes or a no is a *guarantee* at 120
 images: no set can ship containing something nobody looked at. At 9,000 it's a full working
-day of button-pressing, in a channel 9,000 messages long.
+day of button-pressing.
+
+> **Revised.** Moving review onto the page changed the arithmetic without changing the
+> conclusion. The channel is now 3,000 lines rather than 9,000 messages, and comparing a
+> product's shots is one glance rather than three scrolls — so the per-decision cost fell.
+> The **number** of decisions did not. A cheaper tap, 9,000 times, is still a working day,
+> and making comparison cheap arguably brings that wall closer by removing the excuse.
 
 The mitigations that matter at 10× are all attention-side — bulk actions, sampling, auto-
-approving pass-throughs, delegated rights. **None of them are in v1**, and that's the honest
-ceiling of this design.
+approving pass-throughs, delegated rights. **Only the last of those is built** (`/luma
+access`, so the day can be split across several people rather than resting on one). That
+divides the wall; it does not move it. The rest is the honest ceiling of this design.
 
 **The three things that break before that:**
 
 1. **Ellie mutes the channel.** Undetectable from our side, and it silently converts push back into pull — the exact failure of the tool they abandoned. *Watch for:* time-to-first-decision stretching. Assume the notification path broke before assuming she's busy.
-2. **A batch stalls on one un-actioned image.** Completion requires all of them; one missed image blocks delivery. `/status` is the recovery — which is why it's near-essential rather than a reporting feature.
+2. **A batch stalls on one un-actioned image.** Completion requires all of them; one missed image blocks delivery. `/luma status` is the recovery — which is why it's near-essential rather than a reporting feature. The overview page makes the stall visible at a glance, which is the cheaper half of the same fix.
 3. **The first real drop CSV gets rejected on structure.** Validation is strict by design. The mitigation is entirely in the error message: it must name what was expected, what was found, and what to change — because the reader isn't an engineer, and a bad error at that moment reads as "the product is broken."
 
 ---
@@ -269,7 +335,8 @@ ceiling of this design.
 
 - **Live URL:** _TBD_
 - **Slack workspace invite:** _TBD_
-- **Try it yourself:** upload a CSV with the same columns as `data/catalog.csv` via the ingest command; the recap will tell you what it's about to do before anything is spent.
+- **Try it yourself:** `/luma upload` and drop in a CSV with the same columns as `data/catalog.csv`. The recap appears in the same modal and tells you exactly what it would make and what it would cost; nothing is spent until you press Generate. `/luma help` lists everything.
+- **To decide on anything:** `/luma signin` gives you a link that lasts a day. Reading the overview page needs nothing.
 
 ---
 
