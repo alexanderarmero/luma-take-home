@@ -173,6 +173,27 @@ describe("what the override can and cannot replace", () => {
 });
 
 describe("/luma system-prompt", () => {
+  it("asks Slack for an input length Slack will accept", async () => {
+    // Slack refuses a plain_text_input whose max_length is 3000 or more, and
+    // rejects the whole view — so getting this wrong makes the command fail
+    // outright rather than degrade.
+    await app().request(command("system-prompt"));
+
+    const blocks = slack.views[0]!.view.blocks as Array<{
+      element?: { max_length?: number };
+    }>;
+    const lengths = blocks
+      .map((b) => b.element?.max_length)
+      .filter((n): n is number => typeof n === "number");
+
+    expect(lengths).not.toHaveLength(0);
+    for (const length of lengths) expect(length).toBeLessThan(3000);
+  });
+
+  it("leaves room for the built-in wording it prefills", async () => {
+    expect(DEFAULT_DIRECTION.length).toBeLessThan(MAX_DIRECTION_LENGTH);
+  });
+
   it("opens a modal prefilled with what is actually being sent", async () => {
     await app().request(command("system-prompt"));
 
