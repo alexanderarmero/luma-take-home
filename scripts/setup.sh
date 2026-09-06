@@ -211,7 +211,11 @@ MANIFEST
     - command: /luma
       url: ${url}/slack/commands
       description: Generate and review styled product shots
-      usage_hint: status
+      # Slack has no per-subcommand autocomplete: this one string is the whole
+      # of the typeahead. It lists the verbs rather than naming one, because a
+      # hint reading "status" is indistinguishable from "status is the only
+      # thing this does". `/luma help` is the full glossary.
+      usage_hint: upload | status | signin | export | generate | system-prompt | access | help
       should_escape: false
 MANIFEST
   fi
