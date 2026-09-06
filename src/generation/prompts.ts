@@ -39,6 +39,8 @@ type MessagesLike = {
 export interface PromptWriterOptions {
   apiKey: string;
   brand: BrandContext;
+  /** Overrides the built-in direction; the brand block is never replaceable. */
+  direction?: string;
   /** Injectable so the wiring is testable without calling the API. */
   messages?: MessagesLike;
 }
@@ -48,7 +50,7 @@ export function createPromptWriter(options: PromptWriterOptions): PromptWriter {
     options.messages ??
     (new Anthropic({ apiKey: options.apiKey }).messages as unknown as MessagesLike);
 
-  const system = buildSystemPrompt(options.brand);
+  const system = buildSystemPrompt(options.brand, options.direction);
 
   return {
     async write(request) {

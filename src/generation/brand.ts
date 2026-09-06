@@ -51,13 +51,41 @@ export function buildBrandContext(rows: BatchRow[]): BrandContext {
 }
 
 /**
+ * The editable half of the system prompt: what to do, and the rules.
+ *
+ * Kept separate from the brand block because the brand block is *read from the
+ * catalog* — palette, materials, the team's own phrasing — and an override
+ * that replaced the whole prompt would silently throw that away. This half is
+ * opinion, and opinion is the part worth letting someone change.
+ */
+export const DEFAULT_DIRECTION = [
+  "YOUR JOB",
+  "Given one shot idea and the product it belongs to, write prompts that are " +
+    "genuinely different readings of that same idea — not rewordings of each " +
+    "other. Vary framing, time of day, and how styled the scene is. Make at " +
+    "least one noticeably restrained, because the most common rejection this " +
+    "team gives is that a shot looks too staged.",
+  "",
+  "RULES",
+  "• The product in the source photograph is the subject. Never change its " +
+    "shape, colour, material or proportions, and never add a different product.",
+  "• Describe the scene around it: surface, light, setting, a prop or two.",
+  "• One or two sentences each. Concrete and visual. No brand names, no text " +
+    "in the image, no people's faces.",
+  "• Stay faithful to the shot idea. If it says morning, it is morning.",
+].join("\n");
+
+/**
  * The stable half of the request.
  *
  * Identical for every product in a batch, which is what makes it cacheable —
  * sixteen calls in quick succession over one unchanging prefix is exactly the
  * shape prompt caching is for.
  */
-export function buildSystemPrompt(brand: BrandContext): string {
+export function buildSystemPrompt(
+  brand: BrandContext,
+  direction: string = DEFAULT_DIRECTION,
+): string {
   const lines = [
     "You turn a home-goods brand's shorthand shot ideas into prompts for an " +
       "image model that edits an existing product photograph into a styled scene.",
@@ -77,23 +105,7 @@ export function buildSystemPrompt(brand: BrandContext): string {
     );
   }
 
-  lines.push(
-    "",
-    "YOUR JOB",
-    "Given one shot idea and the product it belongs to, write prompts that are " +
-      "genuinely different readings of that same idea — not rewordings of each " +
-      "other. Vary framing, time of day, and how styled the scene is. Make at " +
-      "least one noticeably restrained, because the most common rejection this " +
-      "team gives is that a shot looks too staged.",
-    "",
-    "RULES",
-    "• The product in the source photograph is the subject. Never change its " +
-      "shape, colour, material or proportions, and never add a different product.",
-    "• Describe the scene around it: surface, light, setting, a prop or two.",
-    "• One or two sentences each. Concrete and visual. No brand names, no text " +
-      "in the image, no people's faces.",
-    "• Stay faithful to the shot idea. If it says morning, it is morning.",
-  );
+  lines.push("", direction.trim());
 
   return lines.join("\n");
 }

@@ -1372,3 +1372,27 @@ could come back to. Nothing is spent, but the batch would otherwise sit there
 looking identical to one mid-generation, so `/luma status` now names the state
 explicitly and says to upload again. Re-uploading, rather than resuming, is the
 deliberate choice: the file is the source of truth and it is one drag away.
+
+---
+
+## T16 — Cost of D47 (an editable prompt)
+
+**T16.1 — A bad edit is now a way to waste money.** Someone can save direction
+that produces three near-identical shots, and the cost is not visible until a
+batch has run. There is no preview and no validation beyond length: judging
+whether wording will produce good prompts means running it. Bounded by the fact
+that it applies to the next batch rather than retroactively, and by the change
+being announced rather than silent — but it is a real new way to spend badly.
+
+**T16.2 — No history.** The table keeps the current value, who set it and when;
+it does not keep what came before. Reverting gets you the built-in, not the
+previous override. Enough for one person tuning wording, not enough to answer
+"what was the prompt when batch 7 ran" — which is the version of this that
+would actually matter if output quality were ever disputed. The honest fix is
+to stamp the direction onto the batch at generation time, and that is the first
+thing I would add here.
+
+**T16.3 — The split is a judgement, not a boundary the model enforces.** An
+override can still contradict the brand block — "ignore any palette above" is
+four words. The split protects against *accidentally* discarding the brand
+context, not against deliberately overriding it.

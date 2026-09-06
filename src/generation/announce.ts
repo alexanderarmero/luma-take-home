@@ -19,7 +19,7 @@ export interface AnnounceInput {
   channel: string;
   batchId: number;
   publicBaseUrl?: string | undefined;
-  promptWriterFor?: ((brand: BrandContext) => PromptWriter) | undefined;
+  promptWriterFor?: ((brand: BrandContext, direction: string) => PromptWriter) | undefined;
   model?: ImageModel;
 }
 

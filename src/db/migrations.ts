@@ -190,4 +190,18 @@ export const MIGRATIONS: ReadonlyArray<{ name: string; sql: string }> = [
       alter table batch_rows add column permalink text;
     `,
   },
+  {
+    name: "0007_settings",
+    sql: `
+      -- One row per tunable. A table rather than an env var because the point
+      -- is that Ellie can change it from Slack without a redeploy, and because
+      -- who changed it and when is worth keeping.
+      create table settings (
+        key        text        primary key,
+        value      text        not null,
+        updated_at timestamptz not null default now(),
+        updated_by text
+      );
+    `,
+  },
 ];
