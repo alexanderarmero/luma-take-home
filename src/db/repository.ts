@@ -341,6 +341,122 @@ export interface PipelineJob {
  * double-execute. If the service is ever scaled past one instance, that lock
  * has to arrive with it.
  */
+export interface RegenerationTarget {
+  batchId: number;
+  sku: string;
+  productName: string;
+  shotIdea: string | null;
+  /** Null until the product's set has been posted. */
+  messageTs: string | null;
+  /** The prompt the original candidate was made from, to edit rather than retype. */
+  prompt: string | null;
+  frozen: boolean;
+}
+
+/** Everything needed to decide whether a photo may be regenerated, in one read. */
+export async function getRegenerationTarget(
+  db: SqlClient,
+  imageId: string,
+): Promise<RegenerationTarget | null> {
+  const { rows } = await db.query<{
+    batch_id: string;
+    sku: string;
+    product_name: string;
+    shot_idea: string | null;
+    message_ts: string | null;
+    prompt: string | null;
+    state: string;
+  }>(
+    `select i.batch_id, i.sku, i.product_name, r.shot_idea, r.message_ts,
+            i.prompt, b.state
+       from images i
+       join batch_rows r on r.batch_id = i.batch_id and r.sku = i.sku
+       join batches b    on b.id = i.batch_id
+      where i.id = $1`,
+    [imageId],
+  );
+
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    batchId: Number(row.batch_id),
+    sku: row.sku,
+    productName: row.product_name,
+    shotIdea: row.shot_idea,
+    messageTs: row.message_ts,
+    prompt: row.prompt,
+    frozen: row.state === "delivered",
+  };
+}
+
+/**
+ * Adds one more candidate to a product, at the end.
+ *
+ * Appended, never substituted. A regeneration is a new opinion about a shot,
+ * not a correction of the record — the photo it was asked from stays exactly
+ * where it was, decided or not. That is the same rule that makes an approved
+ * image byte-identical forever.
+ */
+export async function addRegeneratedImage(
+  db: SqlClient,
+  input: {
+    batchId: number;
+    sku: string;
+    productName: string;
+    prompt: string;
+    /** Named by the caller, because naming a file is not the database's job. */
+    filenameFor: (slot: number) => string;
+  },
+): Promise<{ imageId: string; slot: number; filename: string }> {
+  return db.transaction(async (tx) => {
+    // The product's own row is locked first, so two people pressing Regenerate
+    // at once cannot read the same max slot and collide on (batch, sku, slot).
+    // The lock has to be on a real row — `for update` is not allowed on an
+    // aggregate.
+    await tx.query(
+      `select 1 from batch_rows where batch_id = $1 and sku = $2 for update`,
+      [input.batchId, input.sku],
+    );
+
+    const { rows } = await tx.query<{ next: number }>(
+      `select coalesce(max(slot), 0) + 1 as next
+         from images
+        where batch_id = $1 and sku = $2`,
+      [input.batchId, input.sku],
+    );
+    const slot = Number(rows[0]?.next ?? 1);
+
+    const id = randomUUID();
+    const filename = input.filenameFor(slot);
+
+    await tx.query(
+      `insert into images (id, batch_id, sku, product_name, slot, kind, filename, prompt)
+       values ($1, $2, $3, $4, $5, 'styled', $6, $7)`,
+      [id, input.batchId, input.sku, input.productName, slot, filename, input.prompt],
+    );
+    await tx.query(
+      `insert into image_jobs (image_id, batch_id, state)
+       values ($1, $2, 'pending_submit')`,
+      [id, input.batchId],
+    );
+
+    return { imageId: id, slot, filename };
+  });
+}
+
+/** The thread a product's photographs were posted into, if they have been. */
+export async function getProductThread(
+  db: SqlClient,
+  batchId: number,
+  sku: string,
+): Promise<{ messageTs: string | null }> {
+  const { rows } = await db.query<{ message_ts: string | null }>(
+    `select message_ts from batch_rows where batch_id = $1 and sku = $2`,
+    [batchId, sku],
+  );
+  return { messageTs: rows[0]?.message_ts ?? null };
+}
+
 export async function claimNextJob(
   db: SqlClient,
   batchId?: number,

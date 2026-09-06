@@ -15,6 +15,7 @@ import {
 import type { SqlClient } from "../db/client.js";
 import { getImageByObjectKey } from "../db/repository.js";
 import { startBatchAndAnnounce } from "../generation/announce.js";
+import { regenerate } from "../generation/regenerate.js";
 import type { ImageGenerator } from "../generation/generator.js";
 import type { BrandContext } from "../generation/brand.js";
 import type { PromptWriter } from "../generation/prompts.js";
@@ -455,6 +456,34 @@ export function createApp(deps: AppDeps) {
     return outcome.ok
       ? c.json({ ok: true })
       : c.json({ error: "refused", reason: outcome.reason }, 409);
+  });
+
+  /** Ask for one more shot of a product, from a prompt somebody wrote. */
+  app.post("/api/review/:token/regenerate", async (c) => {
+    const state = await buildReviewState(deps.db, c.req.param("token"));
+    if (!state) return c.json({ error: "not_found" }, 404);
+
+    const writer = await resolveWriter(c);
+    if (!writer) return c.json({ error: "not_allowed" }, 403);
+
+    const body = (await c.req.json().catch(() => null)) as {
+      imageId?: string;
+      prompt?: string;
+    } | null;
+    if (!body?.imageId || typeof body.prompt !== "string") {
+      return c.json({ error: "bad_request" }, 400);
+    }
+
+    const outcome = await regenerate({
+      db: deps.db,
+      imageId: body.imageId,
+      prompt: body.prompt,
+    });
+
+    if (!outcome.ok) {
+      return c.json({ error: "refused", reason: outcome.reason }, 409);
+    }
+    return c.json({ ok: true, imageId: outcome.imageId });
   });
 
   /** Freeze the batch and hand it over. */

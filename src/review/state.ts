@@ -25,6 +25,14 @@ export interface ProductView {
   isPassThrough: boolean;
   /** Straight into this product's Slack conversation. */
   threadUrl: string | null;
+  /**
+   * Whether the set has been posted at all.
+   *
+   * Distinct from `threadUrl`: the permalink call can fail while the thread
+   * exists perfectly well, and a regenerated shot needs the thread, not the
+   * link to it.
+   */
+  hasThread: boolean;
   candidates: CandidateView[];
 }
 
@@ -115,6 +123,7 @@ export async function buildReviewState(
       shotIdea: product.shotIdea,
       isPassThrough,
       threadUrl: product.permalink,
+      hasThread: product.messageTs !== null,
       candidates,
     };
   });

@@ -1396,3 +1396,34 @@ thing I would add here.
 override can still contradict the brand block — "ignore any palette above" is
 four words. The split protects against *accidentally* discarding the brand
 context, not against deliberately overriding it.
+
+---
+
+## T17 — Cost of D48/D49 (reshooting)
+
+**T17.1 — A product can grow without limit.** Nothing caps how many times a
+shot can be asked for, and each one costs $0.103. The friction is that every
+reshoot is typed by hand, one at a time, by someone who has to look at the
+result — which is real friction, but it is not a budget. A per-batch or
+per-product ceiling is the obvious next control, and I left it out rather than
+guess a number.
+
+**T17.2 — A failed reshoot says nothing in Slack.** Failures are reported in
+the note posted when a product's thread is created, and that note is
+deliberately not reposted on append. So a reshoot that fails shows as "not
+generated" on the page and is silent in the channel. Acceptable because the
+person who asked is the person looking at the page; wrong if reshooting ever
+becomes something you fire and walk away from.
+
+**T17.3 — The prompt box is prefilled with the prompt, not the shot idea.**
+That makes editing easy and makes it easy to produce a near-duplicate by
+changing one word. The alternative — an empty box — would have made every
+reshoot a fresh act of writing, which is more honest and more annoying. I chose
+the annoying-to-be-honest option in the confirm button and the easy option
+here, because a duplicate shot costs ten cents and a mistaken handover costs a
+batch.
+
+**T17.4 — Two people reshooting the same product at once each add a shot.**
+The slot is allocated under a row lock so they cannot collide, but neither is
+told the other is doing it. They get four candidates instead of three, which is
+the harmless version of that race.

@@ -3,6 +3,7 @@ import {
   claimNextJob,
   ensureReviewToken,
   getProductImages,
+  getProductThread,
   markImagePosted,
   markImageStored,
   setJobState,
@@ -169,22 +170,40 @@ export async function runOnce(
             : {}),
         });
 
-        const { ts: threadTs } = await deps.slack.postMessage({
-          channel: deps.channel,
-          text: channelMessage.text,
-          blocks: channelMessage.blocks,
-        });
+        // A product posts its line once. A regenerated shot arriving later
+        // joins that conversation rather than starting a second one about the
+        // same product.
+        const existing = await getProductThread(deps.db, job.batchId, job.sku);
+        let threadTs: string;
 
-        // Captured now rather than at render time: the overview links straight
-        // into this product's conversation, and doing it here costs one call
-        // per product instead of one per page view.
-        let permalink: string | undefined;
-        try {
-          permalink = await deps.slack.getPermalink(deps.channel, threadTs);
-        } catch {
-          // A missing link costs a button on the page, not the batch.
+        if (existing.messageTs) {
+          threadTs = existing.messageTs;
+          // Redrawn so the line's counts include the shot about to arrive.
+          await deps.slack.updateMessage({
+            channel: deps.channel,
+            ts: threadTs,
+            text: channelMessage.text,
+            blocks: channelMessage.blocks,
+          });
+        } else {
+          const posted = await deps.slack.postMessage({
+            channel: deps.channel,
+            text: channelMessage.text,
+            blocks: channelMessage.blocks,
+          });
+          threadTs = posted.ts;
+
+          // Captured now rather than at render time: the overview links
+          // straight into this product's conversation, and doing it here costs
+          // one call per product instead of one per page view.
+          let permalink: string | undefined;
+          try {
+            permalink = await deps.slack.getPermalink(deps.channel, threadTs);
+          } catch {
+            // A missing link costs a button on the page, not the batch.
+          }
+          await setProductMessageTs(deps.db, job.batchId, job.sku, threadTs, permalink);
         }
-        await setProductMessageTs(deps.db, job.batchId, job.sku, threadTs, permalink);
 
         // Each candidate is its own file share inside that thread: the bytes
         // live in Slack, so the record survives our storage, and a decision
@@ -204,7 +223,11 @@ export async function runOnce(
           await markImagePosted(deps.db, image.imageId, ts ?? "");
         }
 
-        const failed = product.images.filter((i) => i.jobState === "failed");
+        // Only when the thread is new. On an append the note would be
+        // reposted every time, saying the same thing about the same failures.
+        const failed = existing.messageTs
+          ? []
+          : product.images.filter((i) => i.jobState === "failed");
         if (failed.length > 0) {
           await deps.slack.postMessage({
             channel: deps.channel,
