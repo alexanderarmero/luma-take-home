@@ -1407,3 +1407,46 @@ since the uploader is normally the approver. The whole notification design
 rests on the stream being quiet enough that the one ping means *your turn*. A
 second one trains people to ignore both. Accountability is better served by the
 audit trail than by a notification.
+
+---
+
+## D47 — The system prompt is editable, but only its opinion half
+
+**Decision.** `/luma system-prompt` opens a modal showing the wording that turns
+a shot idea into three prompts, prefilled and editable. Saving stores an
+override in a `settings` table (migration 0007); saving an empty box reverts to
+the built-in.
+
+**What is *not* editable, and why.** The system prompt has two halves:
+
+| Half | Where it comes from | Editable |
+|---|---|---|
+| Brand block — palette, materials, categories, the team's own shot-idea phrasing | Read from the uploaded catalog, per batch | No |
+| Direction — the job, and the rules | Written by us | **Yes** |
+
+Letting an override replace the whole prompt would have been less code and
+strictly worse: every edit would silently discard the catalog-derived identity,
+which is the thing that makes the output look like *this* brand rather than
+stock. So `buildSystemPrompt(brand, direction)` composes the two, and the modal
+edits the second while saying plainly what sits above it.
+
+**Absence means default.** Nothing is written to the row until someone
+overrides. Snapshotting the built-in at first open would mean any later
+improvement to the built-in silently failed to reach anyone who had ever opened
+the modal.
+
+**Read at generation time**, not at the composition root — an override saved
+after the process started applies to the next batch, not the next deploy.
+
+**Who may change it.** The same list as approving: `canWrite`, not
+`canAdminister`. It changes what gets made and what it costs, so it belongs
+with the people who answer for the results. Re-checked on submit, because a
+modal outlives the permission that opened it.
+
+**Announced in the channel.** A change to what every future batch looks like is
+not a private setting. The post names who changed it and says it applies to the
+*next* batch — nothing already generated is ever re-made.
+
+**Length is capped at 4,000 characters.** This text rides on every prompt call,
+so a long one is a per-product cost, and the refusal says so rather than just
+naming a limit.

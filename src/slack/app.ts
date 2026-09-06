@@ -19,6 +19,13 @@ import type { ImageGenerator } from "../generation/generator.js";
 import type { BrandContext } from "../generation/brand.js";
 import type { PromptWriter } from "../generation/prompts.js";
 import type { ImageModel } from "../pricing.js";
+import {
+  buildPromptModal,
+  PROMPT_ACTION_ID,
+  PROMPT_BLOCK_ID,
+  PROMPT_CALLBACK_ID,
+} from "../settings/modal.js";
+import { savePromptDirection } from "../settings/prompt.js";
 import { buildStatusSummary } from "../status/status.js";
 import {
   ACCESS_ADD_ACTION,
@@ -76,7 +83,7 @@ export interface AppDeps {
   /** Absolute base for links handed to Slack. */
   publicBaseUrl?: string;
   /** Turns a shot idea into several distinct generation prompts. */
-  promptWriterFor?: (brand: BrandContext) => PromptWriter;
+  promptWriterFor?: (brand: BrandContext, direction: string) => PromptWriter;
   /**
    * Names a modal we push but never learn the id of.
    *
@@ -281,6 +288,29 @@ export function createApp(deps: AppDeps) {
         await slack.openView({
           triggerId,
           view: await buildAccessModal(deps.db, deps.approverUserId ?? ""),
+        });
+        return c.body(null, 200);
+      }
+
+      case "system-prompt": {
+        const { slack } = deps;
+        const triggerId = params.get("trigger_id");
+        if (!slack || !triggerId) {
+          return c.json(ephemeral("That isn't available on this instance."));
+        }
+        // Same list as the page: this changes what gets made and what it
+        // costs, so it belongs with the people who can approve the results.
+        if (!(await canWrite(deps.db, userId, deps.approverUserId ?? ""))) {
+          return c.json(
+            ephemeral(
+              "Only people who can approve photos can change the system " +
+                "prompt. Ask the approver to add you with `/luma access`.",
+            ),
+          );
+        }
+        await slack.openView({
+          triggerId,
+          view: await buildPromptModal(deps.db),
         });
         return c.body(null, 200);
       }
@@ -514,6 +544,56 @@ export function createApp(deps: AppDeps) {
         return c.body(null, 200);
       }
 
+      if (payload.view?.callback_id === PROMPT_CALLBACK_ID) {
+        const text =
+          payload.view?.state?.values?.[PROMPT_BLOCK_ID]?.[PROMPT_ACTION_ID]
+            ?.value ?? "";
+
+        // Re-checked here rather than trusted from the modal being open: the
+        // view outlives the permission that opened it.
+        if (!(await canWrite(deps.db, userId ?? "", deps.approverUserId ?? ""))) {
+          return c.json({
+            response_action: "errors",
+            errors: {
+              [PROMPT_BLOCK_ID]:
+                "You no longer have access to change the system prompt.",
+            },
+          });
+        }
+
+        const outcome = await savePromptDirection(deps.db, {
+          text,
+          byUserId: userId ?? "",
+        });
+
+        if (!outcome.ok) {
+          return c.json({
+            response_action: "errors",
+            errors: { [PROMPT_BLOCK_ID]: outcome.reason },
+          });
+        }
+
+        const { slack, reviewChannelId } = deps;
+        if (slack && reviewChannelId) {
+          const said = outcome.reverted
+            ? "reverted the system prompt to the built-in wording"
+            : "changed the system prompt";
+          // Said in the channel because it changes what every future batch
+          // looks like, and a silent change is one nobody can attribute.
+          deps.defer(async () => {
+            await slack.postMessage({
+              channel: reviewChannelId,
+              text:
+                `<@${userId}> ${said}. It applies to the *next* batch — ` +
+                "photos already generated are never re-made. Run " +
+                "`/luma system-prompt` to see it.",
+            });
+          });
+        }
+
+        return c.body(null, 200);
+      }
+
       if (payload.view?.callback_id === RECAP_CALLBACK_ID) {
         const batchId = Number(payload.view?.private_metadata);
         const { slack, generator, store, reviewChannelId } = deps;
@@ -670,7 +750,10 @@ interface BlockActionsPayload {
     state?: {
       values?: Record<
         string,
-        Record<string, { files?: SlackFile[]; selected_users?: string[] }>
+        Record<
+          string,
+          { files?: SlackFile[]; selected_users?: string[]; value?: string | null }
+        >
       >;
     };
   };

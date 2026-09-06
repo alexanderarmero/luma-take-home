@@ -38,8 +38,8 @@ const app = createApp({
   publicBaseUrl: config.publicBaseUrl,
   ...(config.anthropicApiKey
     ? {
-        promptWriterFor: (brand) =>
-          createPromptWriter({ apiKey: config.anthropicApiKey!, brand }),
+        promptWriterFor: (brand, direction) =>
+          createPromptWriter({ apiKey: config.anthropicApiKey!, brand, direction }),
       }
     : {}),
 });

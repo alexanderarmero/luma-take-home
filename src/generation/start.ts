@@ -1,6 +1,7 @@
 import type { SqlClient } from "../db/client.js";
 import { addImages, getBatchRows, type NewImage } from "../db/repository.js";
 import { CANDIDATES_PER_PRODUCT } from "../pricing.js";
+import { getPromptDirection } from "../settings/prompt.js";
 import { buildBrandContext, type BrandContext } from "./brand.js";
 import { buildFilename } from "./filename.js";
 import { fallbackPrompts, type PromptWriter } from "./prompts.js";
@@ -21,7 +22,7 @@ export async function startGeneration(
      * Built from the batch's own rows, so the writer knows this brand's
      * palette and the register the team writes in.
      */
-    promptWriterFor?: (brand: BrandContext) => PromptWriter;
+    promptWriterFor?: (brand: BrandContext, direction: string) => PromptWriter;
     log?: (message: string) => void;
   } = {},
 ): Promise<{ styled: number; passThrough: number; translated: number }> {
@@ -32,11 +33,15 @@ export async function startGeneration(
   let passThrough = 0;
   let translated = 0;
 
+  // Read here rather than at the composition root: an override saved after
+  // the process started must apply to the next batch, not the next deploy.
+  const direction = await getPromptDirection(db);
+
   // Constructing the writer can throw — a bad key, a missing dependency — and
   // that must not take the batch down with it.
   let promptWriter;
   try {
-    promptWriter = options.promptWriterFor?.(buildBrandContext(rows));
+    promptWriter = options.promptWriterFor?.(buildBrandContext(rows), direction.text);
   } catch (error) {
     log(`[prompts] no prompt writer available: ${(error as Error).message}`);
   }
