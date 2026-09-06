@@ -206,16 +206,55 @@ features:
     always_online: true
 MANIFEST
   if [[ -n "$url" ]]; then
+    # One command per verb, so Slack's typeahead can suggest and filter them.
+    # `/luma <verb>` still works — the handler takes the verb from the command
+    # name when there is one and from the text otherwise.
     cat <<MANIFEST
   slash_commands:
     - command: /luma
       url: ${url}/slack/commands
-      description: Generate and review styled product shots
-      # Slack has no per-subcommand autocomplete: this one string is the whole
-      # of the typeahead. It lists the verbs rather than naming one, because a
-      # hint reading "status" is indistinguishable from "status is the only
-      # thing this does". `/luma help` is the full glossary.
+      description: Styled product shots — run without arguments for the full list
       usage_hint: upload | status | signin | export | generate | system-prompt | access | help
+      should_escape: false
+    - command: /luma-upload
+      url: ${url}/slack/commands
+      description: Read a catalog CSV and price the batch before anything is spent
+      usage_hint: (opens a window — attach the CSV there)
+      should_escape: false
+    - command: /luma-status
+      url: ${url}/slack/commands
+      description: Where the latest batch stands and what still needs deciding
+      usage_hint: (no arguments)
+      should_escape: false
+    - command: /luma-signin
+      url: ${url}/slack/commands
+      description: Get a private link that lets you approve, discard and confirm
+      usage_hint: (no arguments — the link lasts a day)
+      should_escape: false
+    - command: /luma-export
+      url: ${url}/slack/commands
+      description: Download the approved photos of the latest confirmed batch
+      usage_hint: (no arguments — posts a zip to the channel)
+      should_escape: false
+    - command: /luma-generate
+      url: ${url}/slack/commands
+      description: Try an idea on one photo of your own; the result comes back in your DMs
+      usage_hint: (opens a window — attach a photo and write the prompt)
+      should_escape: false
+    - command: /luma-system-prompt
+      url: ${url}/slack/commands
+      description: See and change the wording that turns a shot idea into three prompts
+      usage_hint: (opens a window — clear the box to revert)
+      should_escape: false
+    - command: /luma-access
+      url: ${url}/slack/commands
+      description: See and change who can approve, discard and confirm
+      usage_hint: (approver only — opens a window)
+      should_escape: false
+    - command: /luma-help
+      url: ${url}/slack/commands
+      description: List every command and what it does
+      usage_hint: (no arguments)
       should_escape: false
 MANIFEST
   fi

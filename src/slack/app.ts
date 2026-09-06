@@ -150,7 +150,15 @@ export function createApp(deps: AppDeps) {
 
     const params = new URLSearchParams(raw);
     const userId = params.get("user_id") ?? "";
-    const [subcommand = ""] = (params.get("text") ?? "").trim().split(/\s+/);
+
+    // Two ways in, one handler. `/luma upload` carries the verb in the text;
+    // `/luma-upload` carries it in the command name, which is what makes each
+    // verb separately autocompletable in Slack's typeahead. The dedicated
+    // command wins when both could apply, because naming the command is the
+    // more specific statement of intent.
+    const named = (params.get("command") ?? "").replace(/^\/luma-?/, "");
+    const [typed = ""] = (params.get("text") ?? "").trim().split(/\s+/);
+    const subcommand = named || typed;
 
     switch (subcommand) {
       case "ping":

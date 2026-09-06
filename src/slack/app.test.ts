@@ -70,6 +70,43 @@ beforeEach(() => {
   deferred = [];
 });
 
+describe("reaching a verb two ways", () => {
+  // `/luma status` carries the verb in the text; `/luma-status` carries it in
+  // the command name, which is what lets Slack autocomplete each one.
+  it("routes the verb typed as an argument", async () => {
+    const res = await app().request(slashCommand({ text: "ping" }));
+    expect(((await res.json()) as { text: string }).text).toContain("pong");
+  });
+
+  it("routes the verb named as its own command", async () => {
+    const res = await app().request(
+      slashCommand({ command: "/luma-ping", text: "" }),
+    );
+    expect(((await res.json()) as { text: string }).text).toContain("pong");
+  });
+
+  it("prefers the dedicated command over stray text", async () => {
+    // Typing `/luma-ping status` should ping, not report status: naming the
+    // command is the more specific statement of intent.
+    const res = await app().request(
+      slashCommand({ command: "/luma-ping", text: "status" }),
+    );
+    expect(((await res.json()) as { text: string }).text).toContain("pong");
+  });
+
+  it("still shows the glossary for a bare /luma", async () => {
+    const res = await app().request(slashCommand({ text: "" }));
+    expect(((await res.json()) as { text: string }).text).toContain("What I can do");
+  });
+
+  it("does not treat an unknown dedicated command as a verb", async () => {
+    const res = await app().request(
+      slashCommand({ command: "/luma-nonsense", text: "" }),
+    );
+    expect(((await res.json()) as { text: string }).text).toContain("What I can do");
+  });
+});
+
 describe("health", () => {
   it("reports ok so a platform health check can see the service is up", async () => {
     const res = await app().request("/healthz");
