@@ -328,6 +328,48 @@ describe("the Generate button", () => {
     return started;
   }
 
+  it("closes the whole stack, not just the view it was pressed on", async () => {
+    // The recap was pushed on top of the upload view. An empty 200 closes
+    // only the top one, dropping the person back onto the upload form they
+    // already finished with — which reads exactly like a button that did
+    // nothing.
+    const { res } = await uploadThenPressGenerate();
+    const body = (await res.json()) as { response_action: string };
+    expect(body.response_action).toBe("clear");
+  });
+
+  it("says so in the modal when there is nowhere to post the photos", async () => {
+    // Silently returning here would look identical to a working Generate:
+    // the modal closes and nothing ever appears.
+    slack.files.set(FILE_URL, REAL_CATALOG);
+    await app().request(viewSubmission());
+    await drain();
+    const batch = await getLatestBatch(db);
+
+    const unconfigured = createApp({
+      signingSecret: SECRET,
+      now: () => NOW,
+      defer: (task) => {
+        deferred.push(task);
+      },
+      db,
+      slack,
+      generator,
+      store,
+      newExternalId: () => EXTERNAL_ID,
+    });
+
+    const res = await unconfigured.request(generateSubmission(batch!.id));
+    const body = (await res.json()) as {
+      response_action: string;
+      view: { blocks: unknown[] };
+    };
+
+    expect(body.response_action).toBe("update");
+    expect(JSON.stringify(body.view.blocks)).toContain("nowhere to put the photos");
+    expect(deferred).toHaveLength(0);
+  });
+
   it("acknowledges before starting any work", async () => {
     const { res } = await uploadThenPressGenerate();
     expect(res.status).toBe(200);
