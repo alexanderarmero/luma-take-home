@@ -1449,3 +1449,27 @@ rule is one line when it is wanted.
 cost, do not appear in `/luma status`, and are announced to nobody. That is the
 right call for a private try-out and the wrong one if it ever becomes a habit —
 the first sign of trouble would be a Luma bill nobody can attribute.
+
+
+---
+
+## T19 — Cost of D51 (delivery without a command)
+
+**T19.1 — One route to the files, where there were two.** If the zip upload
+fails, nobody can ask for it again. The failure is reported and says plainly
+that the photographs are still stored and still on the overview page, so
+nothing is *lost* — but recovering the zip now means confirming a new batch or
+a hand operation, where before it meant typing six words. Judged worth it
+because a silent packaging failure is loud and rare, while a delivery step
+somebody has to remember is quiet and constant.
+
+**T19.2 — The confirming user waits longer.** Zipping every approved photo
+happens inside the confirm's deferred task, so a large batch means a longer
+gap between the confirmation appearing and the zip landing under it. The
+confirmation posts first precisely so the gap is visible rather than silent.
+
+**T19.3 — Slack file retention becomes delivery retention.** With no way to
+re-export, the zip's lifetime is Slack's file lifetime. On a plan that expires
+files, the archive expires with them. The obvious answer if that ever matters
+is a download link on the overview page, which is a better second route than
+the command was.

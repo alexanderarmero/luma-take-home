@@ -98,7 +98,10 @@ describe("/luma help", () => {
     const payload = (await (await command("help")).json()) as { text: string };
     expect(payload.text).toContain("/luma upload");
     expect(payload.text).toContain("/luma signin");
-    expect(payload.text).toContain("/luma export");
+    // The zip arrives with the confirmation, so there is nothing to run for
+    // it — and the glossary should not name a command that no longer exists.
+    expect(payload.text).not.toContain("/luma export");
+    expect(payload.text).toContain("arrive as a zip");
   });
 
   it("hides access management from everyone but the approver", () => {

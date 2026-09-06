@@ -203,6 +203,11 @@ describe("deciding from the page", () => {
   });
 });
 
+/** The batch id named in whatever the bot said. */
+function batchIdOf(text: string): number {
+  return Number(text.match(/Batch #(\d+)/)![1]);
+}
+
 describe("confirming from the page", () => {
   async function decideAll(token: string, ids: string[], cookie: string) {
     for (const imageId of ids) {
@@ -286,6 +291,46 @@ describe("confirming from the page", () => {
 
     expect(await getDeliveredBatchId(db)).toBe(batch.id);
     expect(slack.uploads.some((u) => u.filename.endsWith(".csv"))).toBe(true);
+  });
+
+  it("delivers the zip with the confirmation, not on request", async () => {
+    // The handoff is the moment the web person needs the files. A command
+    // they have to know about and remember is a step at exactly the point
+    // where the old process lost things.
+    const { token, imageIds } = await reviewable();
+    const cookie = await signIn(ELLIE);
+    await decideAll(token, imageIds, cookie);
+
+    await post(token, "confirm", {}, cookie);
+    await flush();
+
+    const confirmation = slack.posts.find((p) => p.text.includes("is confirmed"))!;
+    const zip = slack.uploads.find((u) => u.filename.endsWith(".zip"));
+
+    expect(zip).toBeDefined();
+    // In the confirmation's own thread, so the pinned message carries
+    // everything the handoff needs rather than pointing at it.
+    expect(zip!.threadTs).toBe(confirmation.ts);
+    expect(confirmation.text).toContain("attached below");
+  });
+
+  it("says the photos are safe when the zip cannot be built", async () => {
+    // Losing the packaging must not read as losing the photographs.
+    const { token, imageIds } = await reviewable();
+    const cookie = await signIn(ELLIE);
+    await decideAll(token, imageIds, cookie);
+
+    store.get = async () => {
+      throw new Error("bucket unreachable");
+    };
+
+    expect((await post(token, "confirm", {}, cookie)).status).toBe(200);
+    await flush();
+
+    const said = slack.posts.map((p) => p.text).join("\n");
+    expect(said).toContain("couldn't build the zip");
+    expect(said).toContain("still stored");
+    expect(await getDeliveredBatchId(db)).toBe(batchIdOf(said));
   });
 
   it("cannot be confirmed twice", async () => {

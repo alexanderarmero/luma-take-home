@@ -214,7 +214,7 @@ MANIFEST
     - command: /luma
       url: ${url}/slack/commands
       description: Styled product shots — run without arguments for the full list
-      usage_hint: upload | status | signin | export | generate | system-prompt | access | help
+      usage_hint: upload | status | signin | generate | system-prompt | access | help
       should_escape: false
     - command: /luma-upload
       url: ${url}/slack/commands
@@ -230,11 +230,6 @@ MANIFEST
       url: ${url}/slack/commands
       description: Get a private link that lets you approve, discard and confirm
       usage_hint: (no arguments — the link lasts a day)
-      should_escape: false
-    - command: /luma-export
-      url: ${url}/slack/commands
-      description: Download the approved photos of the latest confirmed batch
-      usage_hint: (no arguments — posts a zip to the channel)
       should_escape: false
     - command: /luma-generate
       url: ${url}/slack/commands
