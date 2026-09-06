@@ -321,6 +321,61 @@ describe("the control on the page", () => {
     expect(html).toContain("nothing rewrites it");
   });
 
+  it("is offered on a product that never had a shot idea", async () => {
+    // Having no idea written down is the most likely reason to want one.
+    const batch = await createBatch(db, { sourceFilename: "catalog.csv" });
+    await addBatchRows(db, batch.id, [
+      {
+        sku: "HG-003",
+        productName: "Linen Napkin",
+        category: "Textiles",
+        colour: "Sage",
+        material: "Linen",
+        price: "$18",
+        photoUrl: "https://example.com/a.jpg",
+        shotIdea: null,
+      },
+    ]);
+    await startGeneration(db, batch.id);
+    await drain(workerDeps(), { batchId: batch.id });
+    const token = await ensureReviewToken(db, batch.id);
+
+    const html = renderReviewPage((await buildReviewState(db, token))!, token, {
+      canWrite: true,
+    });
+    expect(html).toContain("Ask for another");
+  });
+
+  it("accepts one for a product with no shot idea", async () => {
+    const batch = await createBatch(db, { sourceFilename: "catalog.csv" });
+    await addBatchRows(db, batch.id, [
+      {
+        sku: "HG-003",
+        productName: "Linen Napkin",
+        category: "Textiles",
+        colour: "Sage",
+        material: "Linen",
+        price: "$18",
+        photoUrl: "https://example.com/a.jpg",
+        shotIdea: null,
+      },
+    ]);
+    await startGeneration(db, batch.id);
+    await drain(workerDeps(), { batchId: batch.id });
+
+    const { images } = await getProductImages(db, batch.id, "HG-003");
+    const outcome = await regenerate({
+      db,
+      imageId: images[0]!.imageId,
+      prompt: "Folded on a sunlit table.",
+    });
+
+    expect(outcome).toMatchObject({ ok: true });
+    const { images: after } = await getProductImages(db, batch.id, "HG-003");
+    expect(after).toHaveLength(2);
+    expect(after.at(-1)!.kind).toBe("styled");
+  });
+
   it("is not offered to a reader who cannot act", async () => {
     const { token } = await seeded();
     const html = renderReviewPage((await buildReviewState(db, token))!, token);

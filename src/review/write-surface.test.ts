@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createMagicLink, grantWriteAccess, redeemMagicLink, revokeWriteAccess } from "../access/store.js";
+import { buildReviewState } from "./state.js";
+import { renderReviewPage } from "./page.js";
 import {
   addBatchRows,
   createBatch,
@@ -247,6 +249,146 @@ describe("confirming from the page", () => {
     await post(token, "confirm", {}, cookie);
 
     expect((await post(token, "confirm", {}, cookie)).status).toBe(409);
+  });
+});
+
+describe("a photo that never arrived", () => {
+  /** A batch whose only styled shot failed outright. */
+  async function withFailure() {
+    const batch = await createBatch(db, { sourceFilename: "catalog.csv" });
+    await addBatchRows(db, batch.id, [
+      {
+        sku: "HG-002",
+        productName: "Mug",
+        category: "Ceramics",
+        colour: "Sage",
+        material: "Stoneware",
+        price: "$28",
+        photoUrl: "https://example.com/a.jpg",
+        shotIdea: "kitchen counter",
+      },
+    ]);
+    await startGeneration(db, batch.id);
+    await drain(
+      {
+        db,
+        generator: {
+          submit: async () => ({ generationId: "gen-1", rateLimit: {} }),
+          poll: async () => ({
+            state: "failed" as const,
+            failureCode: "content_moderated",
+            failureReason: null,
+            retryable: false,
+          }),
+        },
+        store,
+        slack,
+        channel: "C_REVIEW",
+        model: "uni-1-max" as const,
+        aspectRatio: "1:1",
+        fetch: fetchOk,
+        sleep: async () => {},
+      },
+      { batchId: batch.id },
+    );
+
+    const token = await ensureReviewToken(db, batch.id);
+    const { images } = await getProductImages(db, batch.id, "HG-002");
+    return { batch, token, images };
+  }
+
+  it("does not hold the batch open forever", async () => {
+    // The page counted a failed photo as still to review while confirm did
+    // not, so the button never appeared for a batch the endpoint would have
+    // accepted. Two counts, one truth.
+    const { token } = await withFailure();
+    const state = (await buildReviewState(db, token))!;
+
+    expect(state.totals.failed).toBeGreaterThan(0);
+    expect(state.totals.pending).toBe(0);
+  });
+
+  it("can be discarded, and the batch then confirms", async () => {
+    const { token, images } = await withFailure();
+    const cookie = await signIn(ELLIE);
+
+    expect(
+      (await post(token, "decide", { imageId: images[0]!.imageId, decision: "discard" }, cookie))
+        .status,
+    ).toBe(200);
+
+    // Counting pending by subtraction used to drive this negative once a
+    // failed photo was discarded, blocking the batch harder than before.
+    expect((await buildReviewState(db, token))!.totals.pending).toBe(0);
+    expect((await post(token, "confirm", {}, cookie)).status).toBe(200);
+  });
+
+  it("can be tried again, which puts it back in the queue", async () => {
+    const { batch, token, images } = await withFailure();
+    const cookie = await signIn(ELLIE);
+
+    const res = await post(token, "retry", { imageId: images[0]!.imageId }, cookie);
+    expect(res.status).toBe(200);
+
+    const { images: after } = await getProductImages(db, batch.id, "HG-002");
+    expect(after[0]!.jobState).toBe("pending_submit");
+    // The same row, not a new one: the shot that is missing is this one.
+    expect(after).toHaveLength(images.length);
+    expect(after[0]!.imageId).toBe(images[0]!.imageId);
+  });
+
+  it("actually regenerates once retried", async () => {
+    const { batch, token, images } = await withFailure();
+    const cookie = await signIn(ELLIE);
+    await post(token, "retry", { imageId: images[0]!.imageId }, cookie);
+
+    await drain(
+      {
+        db,
+        generator: {
+          submit: async () => ({ generationId: "gen-2", rateLimit: {} }),
+          poll: async () => ({ state: "completed" as const, outputUrl: "https://luma/o.jpg" }),
+        },
+        store,
+        slack,
+        channel: "C_REVIEW",
+        model: "uni-1-max" as const,
+        aspectRatio: "1:1",
+        fetch: fetchOk,
+        sleep: async () => {},
+      },
+      { batchId: batch.id },
+    );
+
+    const { images: after } = await getProductImages(db, batch.id, "HG-002");
+    expect(after[0]!.jobState).toBe("posted");
+  });
+
+  it("refuses to retry something that did not fail", async () => {
+    const { token, imageIds } = await reviewable();
+    const cookie = await signIn(ELLIE);
+
+    const res = await post(token, "retry", { imageId: imageIds[0] }, cookie);
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { reason: string }).reason).toContain("hasn't failed");
+  });
+
+  it("refuses a retry from a reader who is not signed in", async () => {
+    const { images, token } = await withFailure();
+    expect((await post(token, "retry", { imageId: images[0]!.imageId })).status).toBe(403);
+  });
+
+  it("offers try-again and discard, but never approve", async () => {
+    const { token } = await withFailure();
+    const html = renderReviewPage((await buildReviewState(db, token))!, token, {
+      canWrite: true,
+    });
+
+    expect(html).toContain("Try again");
+    expect(html).toContain("failed-acts");
+    // Nothing arrived, so there is nothing to approve.
+    const failedBlock = html.slice(html.indexOf("failed-acts"));
+    expect(failedBlock.slice(0, 200)).not.toContain("Approve");
   });
 });
 

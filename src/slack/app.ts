@@ -13,7 +13,7 @@ import {
   UPLOAD_CALLBACK_ID,
 } from "../catalog/ingest.js";
 import type { SqlClient } from "../db/client.js";
-import { getImageByObjectKey } from "../db/repository.js";
+import { getImageByObjectKey, retryFailedImage } from "../db/repository.js";
 import { startBatchAndAnnounce } from "../generation/announce.js";
 import { runOneOff } from "../generation/oneoff.js";
 import {
@@ -555,6 +555,23 @@ export function createApp(deps: AppDeps) {
       return c.json({ error: "refused", reason: outcome.reason }, 409);
     }
     return c.json({ ok: true, imageId: outcome.imageId });
+  });
+
+  /** Put a photo that never arrived back in the queue. */
+  app.post("/api/review/:token/retry", async (c) => {
+    const state = await buildReviewState(deps.db, c.req.param("token"));
+    if (!state) return c.json({ error: "not_found" }, 404);
+
+    const writer = await resolveWriter(c);
+    if (!writer) return c.json({ error: "not_allowed" }, 403);
+
+    const body = (await c.req.json().catch(() => null)) as { imageId?: string } | null;
+    if (!body?.imageId) return c.json({ error: "bad_request" }, 400);
+
+    const outcome = await retryFailedImage(deps.db, body.imageId);
+    return outcome.ok
+      ? c.json({ ok: true })
+      : c.json({ error: "refused", reason: outcome.reason }, 409);
   });
 
   /** Freeze the batch and hand it over. */

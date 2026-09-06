@@ -1032,23 +1032,79 @@ export async function batchDecisionCounts(
   db: SqlClient,
   batchId: number,
 ): Promise<{ decidable: number; approved: number; discarded: number; pending: number }> {
+  // Pending is counted directly rather than derived by subtraction. A photo
+  // that never arrived may still be discarded — an explicit "not pursuing
+  // this" — and subtracting a discarded-but-failed image from a total that
+  // excluded it drove the count negative, which reads as "never finished".
   const { rows } = await db.query<{
-    decidable: string;
+    pending: string;
     approved: string;
     discarded: string;
   }>(
     `select
-       (select count(*) from image_jobs      where batch_id = $1 and state <> 'failed') as decidable,
-       (select count(*) from approved_images where batch_id = $1) as approved,
+       (select count(*)
+          from images i
+          join image_jobs j            on j.image_id = i.id
+          left join approved_images a  on a.image_id = i.id
+          left join discarded_images d on d.image_id = i.id
+         where i.batch_id = $1
+           and a.image_id is null
+           and d.image_id is null
+           and j.state <> 'failed') as pending,
+       (select count(*) from approved_images  where batch_id = $1) as approved,
        (select count(*) from discarded_images where batch_id = $1) as discarded`,
     [batchId],
   );
 
   const row = rows[0]!;
-  const decidable = Number(row.decidable);
+  const pending = Number(row.pending);
   const approved = Number(row.approved);
   const discarded = Number(row.discarded);
-  return { decidable, approved, discarded, pending: decidable - approved - discarded };
+  return { decidable: pending + approved + discarded, approved, discarded, pending };
+}
+
+/**
+ * Puts a photo that never arrived back in the queue.
+ *
+ * Attempts are reset, not continued: the job already exhausted them, and the
+ * person asking has usually just fixed whatever caused it. Re-running the same
+ * row rather than appending a new one, because the shot that is missing is
+ * this one — a reshoot is for wanting something different.
+ */
+export async function retryFailedImage(
+  db: SqlClient,
+  imageId: string,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const { rows } = await db.query<{ kind: ImageKind; state: JobState; batch_state: string }>(
+    `select i.kind, j.state, b.state as batch_state
+       from images i
+       join image_jobs j on j.image_id = i.id
+       join batches b    on b.id = i.batch_id
+      where i.id = $1`,
+    [imageId],
+  );
+
+  const row = rows[0];
+  if (!row) return { ok: false, reason: "That photo doesn't exist." };
+  if (row.state !== "failed") {
+    return { ok: false, reason: "That photo hasn't failed, so there is nothing to retry." };
+  }
+  if (row.batch_state === "delivered") {
+    return {
+      ok: false,
+      reason:
+        "This batch has been confirmed and handed over, so it can't be changed.",
+    };
+  }
+
+  await db.query(
+    `update image_jobs
+        set state = $2, attempts = 0, failure_code = null, last_error = null,
+            generation_id = null, updated_at = now()
+      where image_id = $1`,
+    [imageId, row.kind === "pass_through" ? "pending_fetch" : "pending_submit"],
+  );
+  return { ok: true };
 }
 
 /**
