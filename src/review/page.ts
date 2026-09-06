@@ -231,11 +231,20 @@ export function renderReviewPage(
     const imageId = group.dataset.image;
     group.querySelectorAll("button").forEach((button) => {
       button.addEventListener("click", async () => {
-        const decision = button.classList.contains("approve") ? "approve" : "discard";
-        group.querySelectorAll("button").forEach((b) => (b.disabled = true));
-        const ok = await send("/api/review/" + TOKEN + "/decide", { imageId, decision });
+        const buttons = group.querySelectorAll("button");
+        buttons.forEach((b) => (b.disabled = true));
+
+        // "Try again" re-runs the photo that is missing. Discard and approve
+        // settle it as it stands.
+        const ok = button.classList.contains("retry")
+          ? await send("/api/review/" + TOKEN + "/retry", { imageId })
+          : await send("/api/review/" + TOKEN + "/decide", {
+              imageId,
+              decision: button.classList.contains("approve") ? "approve" : "discard",
+            });
+
         if (ok) location.reload();
-        else group.querySelectorAll("button").forEach((b) => (b.disabled = false));
+        else buttons.forEach((b) => (b.disabled = false));
       });
     });
   });
@@ -402,11 +411,16 @@ function renderCandidate(
 
   const decidable = viewer.canWrite && candidate.state !== "failed" && candidate.imageUrl;
 
+  // A photo that never arrived can be discarded or tried again — not
+  // approved, since there is nothing to approve. Leaving it with no controls
+  // at all was what stranded a batch: it could never be settled, and it could
+  // never be chased either.
+  const failed = viewer.canWrite && candidate.state === "failed";
+
   // A reshoot is posted into the product's thread, and a product with no
-  // thread yet has nowhere to put it. Offered on a failed shot too — a shot
-  // that never arrived is exactly when you want to ask for another.
-  const reshootable =
-    viewer.canWrite && product.hasThread && !product.isPassThrough;
+  // thread yet has nowhere to put it. Offered on a product with no shot idea
+  // too: having no idea written down is the most likely reason to want one.
+  const reshootable = viewer.canWrite && product.hasThread;
 
   return `<figure data-state="${esc(candidate.state)}"${candidate.isPassThrough ? ' data-passthrough="1"' : ""}>
     ${visual}
@@ -418,6 +432,14 @@ function renderCandidate(
         ? `<div class="acts" data-image="${esc(candidate.imageId)}">
              <button class="approve${candidate.state === "approved" ? " on" : ""}">Approve</button>
              <button class="discard${candidate.state === "discarded" ? " on" : ""}">Discard</button>
+           </div>`
+        : ""
+    }
+    ${
+      failed
+        ? `<div class="acts failed-acts" data-image="${esc(candidate.imageId)}">
+             <button class="retry">Try again</button>
+             <button class="discard">Discard</button>
            </div>`
         : ""
     }

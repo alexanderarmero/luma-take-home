@@ -1,7 +1,7 @@
 import { explainFailure } from "../generation/message.js";
 import type { SqlClient } from "../db/client.js";
 import {
-  batchCounts,
+  batchDecisionCounts,
   findBatchByReviewToken,
   getBatchProducts,
 } from "../db/repository.js";
@@ -89,7 +89,7 @@ export async function buildReviewState(
 
   const [products, counts] = await Promise.all([
     getBatchProducts(db, batch.id),
-    batchCounts(db, batch.id),
+    batchDecisionCounts(db, batch.id),
   ]);
 
   let ready = 0;
@@ -145,6 +145,8 @@ export async function buildReviewState(
     };
   });
 
+  const totalImages = views.reduce((n, view) => n + view.candidates.length, 0);
+
   return {
     batchId: batch.id,
     sourceFilename: batch.sourceFilename,
@@ -152,7 +154,9 @@ export async function buildReviewState(
     inProgress: generating > 0,
     totals: {
       products: views.length,
-      images: counts.total,
+      // Counted from what is on the page rather than asked of the database
+      // again: these are the same rows, and two sources would be two answers.
+      images: totalImages,
       ready,
       approved: counts.approved,
       discarded: counts.discarded,
@@ -162,7 +166,7 @@ export async function buildReviewState(
     },
     // Only generated images cost anything; pass-throughs are free.
     spentUsd: Number((generated * PRICING.imageEdit[model]).toFixed(4)),
-    revision: [ready, failed, counts.approved, counts.discarded, counts.total].join("-"),
+    revision: [ready, failed, counts.approved, counts.discarded, totalImages].join("-"),
     products: views,
   };
 }
