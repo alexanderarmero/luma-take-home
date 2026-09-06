@@ -14,6 +14,8 @@ export interface CandidateView {
   filename: string;
   /** No shot idea was given, so this is the original photo, unchanged. */
   isPassThrough: boolean;
+  /** Someone asked for this exact shot again after it failed. */
+  retried: boolean;
   /** Absent until the image has been stored. */
   imageUrl: string | null;
   prompt: string | null;
@@ -55,6 +57,8 @@ export interface ReviewState {
     failed: number;
     /** Products with no shot idea: their original photo, unchanged. */
     passThrough: number;
+    /** Photos that failed once and were asked for again. */
+    retried: number;
   };
   spentUsd: number;
   /** Changes whenever anything the page shows has changed. */
@@ -97,6 +101,7 @@ export async function buildReviewState(
   let generating = 0;
   let generated = 0;
   let passThrough = 0;
+  let retried = 0;
 
   const views: ProductView[] = products.map((product) => {
     const isPassThrough = product.images.some((i) => i.kind === "pass_through");
@@ -112,6 +117,7 @@ export async function buildReviewState(
       } else if (image.kind === "pass_through") {
         passThrough += 1;
       }
+      if ((image.retries ?? 0) > 0) retried += 1;
 
       return {
         imageId: image.imageId,
@@ -131,6 +137,7 @@ export async function buildReviewState(
               })
             : null,
         isPassThrough: image.kind === "pass_through",
+        retried: (image.retries ?? 0) > 0,
       };
     });
 
@@ -163,10 +170,15 @@ export async function buildReviewState(
       pending: counts.pending,
       failed,
       passThrough,
+      retried,
     },
     // Only generated images cost anything; pass-throughs are free.
     spentUsd: Number((generated * PRICING.imageEdit[model]).toFixed(4)),
-    revision: [ready, failed, counts.approved, counts.discarded, totalImages].join("-"),
+    // Retries are part of the revision: a photo going back into the queue is
+    // a change the page must notice, and its state alone can look unmoved.
+    revision: [ready, failed, counts.approved, counts.discarded, totalImages, retried].join(
+      "-",
+    ),
     products: views,
   };
 }

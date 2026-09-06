@@ -683,6 +683,8 @@ export interface ProductImage {
    * refusal by the model.
    */
   lastError?: string | null;
+  /** How many times someone has asked for this exact shot again. */
+  retries?: number;
 }
 
 /**
@@ -707,12 +709,13 @@ export async function getProductImages(
     state: JobState;
     failure_code: string | null;
     last_error: string | null;
+    retries: number;
     product_name: string;
     shot_idea: string | null;
     decision: string | null;
   }>(
     `select i.id as image_id, i.slot, i.filename, i.prompt, i.kind,
-            i.object_key, j.state, j.failure_code, j.last_error,
+            i.object_key, j.state, j.failure_code, j.last_error, j.retries,
             i.product_name, r.shot_idea,
             case
               when a.image_id is not null then 'approved'
@@ -742,6 +745,7 @@ export async function getProductImages(
       jobState: r.state,
       failureCode: r.failure_code,
       lastError: r.last_error,
+      retries: Number(r.retries ?? 0),
       decision: (r.decision as "approved" | "discarded" | null) ?? null,
     })),
   };
@@ -859,11 +863,13 @@ export async function getBatchProducts(
     object_key: string | null;
     state: JobState | null;
     failure_code: string | null;
+    last_error: string | null;
+    retries: number | null;
     decision: string | null;
   }>(
     `select r.sku, r.product_name, r.shot_idea, r.message_ts, r.permalink,
             i.id as image_id, i.slot, i.filename, i.prompt, i.kind,
-            i.object_key, j.state, j.failure_code,
+            i.object_key, j.state, j.failure_code, j.last_error, j.retries,
             case
               when a.image_id is not null then 'approved'
               when d.image_id is not null then 'discarded'
@@ -905,6 +911,8 @@ export async function getBatchProducts(
         objectKey: row.object_key,
         jobState: row.state ?? "pending_submit",
         failureCode: row.failure_code,
+        lastError: row.last_error,
+        retries: Number(row.retries ?? 0),
         decision: (row.decision as "approved" | "discarded" | null) ?? null,
       });
     }
@@ -1100,11 +1108,34 @@ export async function retryFailedImage(
   await db.query(
     `update image_jobs
         set state = $2, attempts = 0, failure_code = null, last_error = null,
-            generation_id = null, updated_at = now()
+            generation_id = null, retries = retries + 1, updated_at = now()
       where image_id = $1`,
     [imageId, row.kind === "pass_through" ? "pending_fetch" : "pending_submit"],
   );
   return { ok: true };
+}
+
+/** Remembered so the pin can be lifted when the batch is handed over. */
+export async function setIntroMessageTs(
+  db: SqlClient,
+  batchId: number,
+  messageTs: string,
+): Promise<void> {
+  await db.query(`update batches set intro_message_ts = $2 where id = $1`, [
+    batchId,
+    messageTs,
+  ]);
+}
+
+export async function getIntroMessageTs(
+  db: SqlClient,
+  batchId: number,
+): Promise<string | null> {
+  const { rows } = await db.query<{ intro_message_ts: string | null }>(
+    `select intro_message_ts from batches where id = $1`,
+    [batchId],
+  );
+  return rows[0]?.intro_message_ts ?? null;
 }
 
 /**

@@ -159,6 +159,7 @@ export function renderReviewPage(
       { key: "approved", label: "Approved", count: totals.approved },
       { key: "discarded", label: "Discarded", count: totals.discarded },
       { key: "passthrough", label: "No shot idea", count: totals.passThrough },
+      { key: "retried", label: "Retried", count: totals.retried },
       { key: "failed", label: "Didn't arrive", count: totals.failed },
     ]
       // Shown at zero rather than hidden, and disabled: a filter that appears
@@ -264,10 +265,12 @@ export function renderReviewPage(
 
       section.querySelectorAll("figure").forEach((figure) => {
         const state = figure.dataset.state;
-        const passthrough = figure.dataset.passthrough === "1";
         const match =
           name === "all" ? true :
-          name === "passthrough" ? passthrough :
+          // Two cross-cutting filters: what a photo *is*, rather than where
+          // it has got to. Both can be true of an approved shot.
+          name === "passthrough" ? figure.dataset.passthrough === "1" :
+          name === "retried" ? figure.dataset.retried === "1" :
           state === name;
 
         figure.hidden = !match;
@@ -422,7 +425,9 @@ function renderCandidate(
   // too: having no idea written down is the most likely reason to want one.
   const reshootable = viewer.canWrite && product.hasThread;
 
-  return `<figure data-state="${esc(candidate.state)}"${candidate.isPassThrough ? ' data-passthrough="1"' : ""}>
+  return `<figure data-state="${esc(candidate.state)}"${
+    candidate.isPassThrough ? ' data-passthrough="1"' : ""
+  }${candidate.retried ? ' data-retried="1"' : ""}>
     ${visual}
     <figcaption>${esc(candidate.filename)}<br>
       <span class="tag ${tagClass}">${esc(label)}</span>

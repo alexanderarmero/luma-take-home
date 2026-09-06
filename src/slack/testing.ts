@@ -6,7 +6,8 @@ import type {
 } from "./client.js";
 
 export interface FakeSlack extends SlackClient {
-  posts: PostMessageInput[];
+  /** With the `ts` the fake handed back, so a test can name what it posted. */
+  posts: Array<PostMessageInput & { ts: string }>;
   ephemerals: Array<{ responseUrl: string; text: string }>;
   updates: UpdateMessageInput[];
   uploads: UploadFileInput[];
@@ -20,6 +21,8 @@ export interface FakeSlack extends SlackClient {
   files: Map<string, string>;
   /** DM channels opened, in order. */
   dms: string[];
+  /** Messages currently pinned, as `channel:ts`. */
+  pinned: Set<string>;
   reset(): void;
 }
 
@@ -41,10 +44,14 @@ export function createFakeSlack(): FakeSlack {
     viewUpdates: [],
     files: new Map(),
     dms: [],
+    pinned: new Set<string>(),
 
     postMessage: async (input) => {
-      fake.posts.push(input);
-      return { ts: `170000000${fake.posts.length}.000100` };
+      const ts = `170000000${fake.posts.length + 1}.000100`;
+      // Recorded on the post, so a test can assert what was pinned or
+      // threaded without recomputing the fake's own numbering.
+      fake.posts.push({ ...input, ts });
+      return { ts };
     },
     updateMessage: async (input) => {
       fake.updates.push(input);
@@ -83,6 +90,14 @@ export function createFakeSlack(): FakeSlack {
       return { bytes: Buffer.from(content), contentType: "image/jpeg" };
     },
 
+    pinMessage: async ({ channel, ts }) => {
+      fake.pinned.add(`${channel}:${ts}`);
+    },
+
+    unpinMessage: async ({ channel, ts }) => {
+      fake.pinned.delete(`${channel}:${ts}`);
+    },
+
     openDirectMessage: async (userId) => {
       const channel = `D_${userId}`;
       fake.dms.push(channel);
@@ -115,7 +130,8 @@ export function allImageFilenames(slack: { uploads: Array<{ filename: string }> 
 
 /** The product lines posted to the channel, ignoring threaded replies. */
 export function channelProductMessages(slack: {
-  posts: PostMessageInput[];
+  /** With the `ts` the fake handed back, so a test can name what it posted. */
+  posts: Array<PostMessageInput & { ts: string }>;
 }): PostMessageInput[] {
   return slack.posts.filter(
     (p) => p.threadTs === undefined && /^HG-\d+ · /.test(p.text),

@@ -1,4 +1,8 @@
-import { ensureReviewToken, setBatchState } from "../db/repository.js";
+import {
+  ensureReviewToken,
+  setBatchState,
+  setIntroMessageTs,
+} from "../db/repository.js";
 import type { SqlClient } from "../db/client.js";
 import {
   CANDIDATES_PER_PRODUCT,
@@ -19,6 +23,7 @@ export interface AnnounceInput {
   channel: string;
   batchId: number;
   publicBaseUrl?: string | undefined;
+  log?: ((message: string) => void) | undefined;
   promptWriterFor?: ((brand: BrandContext, direction: string) => PromptWriter) | undefined;
   model?: ImageModel;
 }
@@ -53,12 +58,13 @@ export function estimateBatchCost(
 export async function startBatchAndAnnounce(input: AnnounceInput): Promise<void> {
   const { db, slack, channel, batchId, publicBaseUrl } = input;
   const model = input.model ?? DEFAULT_IMAGE_MODEL;
+  const log = input.log ?? ((message: string) => console.log(message));
 
   try {
     const reviewToken = await ensureReviewToken(db, batchId);
     const overviewUrl = publicBaseUrl ? `${publicBaseUrl}/review/${reviewToken}` : null;
 
-    await slack.postMessage({
+    const intro = await slack.postMessage({
       channel,
       text: [
         // No @-mention here: the one ping per batch is the "ready for
@@ -83,6 +89,17 @@ export async function startBatchAndAnnounce(input: AnnounceInput): Promise<void>
           "will be ready when the photos are.",
       ].join("\n"),
     });
+
+    // Pinned so it stays reachable after the batch's own photographs have
+    // pushed it out of view — this is the message carrying the overview link
+    // and the sign-in instruction, which are exactly what someone coming back
+    // two days later needs. Failing to pin costs a convenience, not a batch.
+    try {
+      await slack.pinMessage({ channel, ts: intro.ts });
+      await setIntroMessageTs(db, batchId, intro.ts);
+    } catch (error) {
+      log(`[announce] could not pin the intro: ${(error as Error).message}`);
+    }
 
     const counts = await startGeneration(db, batchId, {
       ...(input.promptWriterFor ? { promptWriterFor: input.promptWriterFor } : {}),

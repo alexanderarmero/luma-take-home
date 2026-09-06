@@ -267,6 +267,7 @@ oauth_config:
       - files:write
       - files:read
       - im:write
+      - pins:write
 settings:
 MANIFEST
   if [[ -n "$url" ]]; then

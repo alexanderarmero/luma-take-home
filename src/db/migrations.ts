@@ -204,4 +204,18 @@ export const MIGRATIONS: ReadonlyArray<{ name: string; sql: string }> = [
       );
     `,
   },
+  {
+    name: "0008_retries_and_pinned_intro",
+    sql: `
+      -- Counted, not a flag: "tried twice and still nothing" is a different
+      -- thing to look at than "tried once", and the page can only offer a
+      -- Retried filter if something remembers.
+      alter table image_jobs add column retries integer not null default 0;
+
+      -- The batch's opening message, kept so it can be unpinned when the
+      -- batch is handed over. A pin nobody removes is just clutter with a
+      -- longer half-life.
+      alter table batches add column intro_message_ts text;
+    `,
+  },
 ];
