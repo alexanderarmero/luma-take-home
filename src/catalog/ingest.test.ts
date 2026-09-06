@@ -445,6 +445,30 @@ describe("the Generate button", () => {
     expect(first).toContain("anyone can open the overview");
   });
 
+  it("pins the opening message so it survives the stream", async () => {
+    // This is the message carrying the overview link and the sign-in
+    // instruction — exactly what someone coming back two days later needs,
+    // and exactly what the batch's own photographs push out of view.
+    await uploadThenPressGenerate();
+    await drain();
+
+    const intro = slack.posts[0]!;
+    expect(slack.pinned.has(`C_REVIEW:${intro.ts ?? ""}`)).toBe(true);
+  });
+
+  it("starts the batch even when pinning is refused", async () => {
+    // pins:write may not be granted. A pin is a convenience, not a batch.
+    slack.pinMessage = async () => {
+      throw new Error("missing_scope");
+    };
+
+    await uploadThenPressGenerate();
+    await drain();
+
+    expect(slack.posts[0]!.text).toContain("has started");
+    expect(slack.posts.length).toBeGreaterThan(1);
+  });
+
   it("says publicly what the batch costs", async () => {
     // The recap that used to carry this is now private to the uploader, but
     // the spend is still the team's business.

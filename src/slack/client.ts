@@ -82,6 +82,15 @@ export interface SlackClient {
    */
   openDirectMessage(userId: string): Promise<string>;
   /**
+   * Pins a message to the channel. Needs the `pins:write` scope.
+   *
+   * Used for the one message per batch that people come back to. Unpinned
+   * when the batch is handed over — a pin nobody removes is clutter with a
+   * longer half-life.
+   */
+  pinMessage(input: { channel: string; ts: string }): Promise<void>;
+  unpinMessage(input: { channel: string; ts: string }): Promise<void>;
+  /**
    * The private URL of an uploaded file.
    *
    * `files.completeUploadExternal` returns only `{id, title}`, so anything
@@ -290,6 +299,14 @@ export function createSlackClient(options: SlackClientOptions): SlackClient {
         bytes: Buffer.from(await response.arrayBuffer()),
         contentType: contentType || "image/jpeg",
       };
+    },
+
+    async pinMessage({ channel, ts }) {
+      await callJson("pins.add", { channel, timestamp: ts });
+    },
+
+    async unpinMessage({ channel, ts }) {
+      await callJson("pins.remove", { channel, timestamp: ts });
     },
 
     async openDirectMessage(userId) {

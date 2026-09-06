@@ -8,6 +8,7 @@ import {
   ensureReviewToken,
   getDeliveredBatchId,
   getProductImages,
+  setIntroMessageTs,
 } from "../db/repository.js";
 import { createTestDb, type TestDb } from "../db/testing.js";
 import { startGeneration } from "../generation/start.js";
@@ -242,6 +243,21 @@ describe("confirming from the page", () => {
     expect(slack.uploads.some((u) => u.filename.endsWith(".csv"))).toBe(true);
   });
 
+  it("lifts the batch's pin, so pins do not become a history of everything", async () => {
+    const { batch, token, imageIds } = await reviewable();
+    const cookie = await signIn(ELLIE);
+
+    // Stands in for the pin the batch's opening message gets when it starts.
+    await setIntroMessageTs(db, batch.id, "1700000001.000100");
+    slack.pinned.add("C_REVIEW:1700000001.000100");
+
+    await decideAll(token, imageIds, cookie);
+    expect((await post(token, "confirm", {}, cookie)).status).toBe(200);
+    await flush();
+
+    expect(slack.pinned.has("C_REVIEW:1700000001.000100")).toBe(false);
+  });
+
   it("cannot be confirmed twice", async () => {
     const { token, imageIds } = await reviewable();
     const cookie = await signIn(ELLIE);
@@ -362,6 +378,34 @@ describe("a photo that never arrived", () => {
 
     const { images: after } = await getProductImages(db, batch.id, "HG-002");
     expect(after[0]!.jobState).toBe("posted");
+  });
+
+  it("is marked as retried, and filterable as such", async () => {
+    // A retried photo looks identical to one that never failed once it
+    // arrives, and "which of these needed chasing?" is worth being able to
+    // ask afterwards.
+    const { token, images } = await withFailure();
+    const cookie = await signIn(ELLIE);
+    await post(token, "retry", { imageId: images[0]!.imageId }, cookie);
+
+    const state = (await buildReviewState(db, token))!;
+    expect(state.totals.retried).toBe(1);
+    expect(state.products[0]!.candidates[0]!.retried).toBe(true);
+
+    const html = renderReviewPage(state, token, { canWrite: true });
+    expect(html).toContain('data-filter="retried"');
+    expect(html).toContain('data-retried="1"');
+  });
+
+  it("changes the revision, so an open page notices the retry", async () => {
+    // Back in the queue is a change; its state alone can look unmoved.
+    const { token, images } = await withFailure();
+    const before = (await buildReviewState(db, token))!.revision;
+
+    const cookie = await signIn(ELLIE);
+    await post(token, "retry", { imageId: images[0]!.imageId }, cookie);
+
+    expect((await buildReviewState(db, token))!.revision).not.toBe(before);
   });
 
   it("refuses to retry something that did not fail", async () => {
