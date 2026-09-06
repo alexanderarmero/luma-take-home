@@ -752,18 +752,22 @@ export function createApp(deps: AppDeps) {
         const batchId = Number(payload.view?.private_metadata);
         const { slack, generator, store, reviewChannelId } = deps;
 
-        if (!slack || !reviewChannelId) return c.body(null, 200);
-        if (!generator || !store) {
-          // A view with no input blocks has nowhere to hang a field error, so
-          // the refusal replaces the view — said where the person is looking
-          // rather than in a channel they may not have open.
+        // A view with no input blocks has nowhere to hang a field error, so a
+        // refusal replaces the view — said where the person is looking rather
+        // than in a channel they may not have open, or worse, nowhere at all.
+        const cannotRun =
+          !slack || !reviewChannelId
+            ? "I'm not configured to post to a review channel, so there is " +
+              "nowhere to put the photos. Nothing has been charged."
+            : !generator || !store
+              ? "Generation isn't configured on this instance, so there is " +
+                "nothing to run. Nothing has been charged."
+              : null;
+
+        if (cannotRun || !slack || !reviewChannelId || !generator || !store) {
           return c.json({
             response_action: "update",
-            view: buildIngestErrorModal(
-              `err-${batchId}`,
-              "Generation isn't configured on this instance, so there is " +
-                "nothing to run. Nothing has been charged.",
-            ),
+            view: buildIngestErrorModal(`err-${batchId}`, cannotRun ?? ""),
           });
         }
 
@@ -779,8 +783,11 @@ export function createApp(deps: AppDeps) {
           });
         });
 
-        // An empty 200 closes the whole modal stack.
-        return c.body(null, 200);
+        // "clear", not an empty body. An empty 200 closes only the view being
+        // submitted, and this one was *pushed* on top of the upload view — so
+        // closing it drops the person back onto the upload form they already
+        // finished with, which reads exactly like the button did nothing.
+        return c.json({ response_action: "clear" });
       }
 
       if (payload.view?.callback_id !== UPLOAD_CALLBACK_ID) return c.body(null, 200);
