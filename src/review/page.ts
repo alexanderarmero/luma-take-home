@@ -92,6 +92,22 @@ export function renderReviewPage(
   .acts button:hover { border-color:var(--accent); }
   .acts button.on { background:var(--accent); border-color:var(--accent); color:#fff; }
   .acts button[disabled] { opacity:.5; cursor:default; }
+  .reshoot { margin-top:6px; }
+  .reshoot > button.ask { width:100%; padding:6px 4px; font-size:12px;
+                          cursor:pointer; border:1px solid var(--line);
+                          border-radius:6px; background:var(--bg);
+                          color:var(--muted); }
+  .reshoot > button.ask:hover { border-color:var(--accent); color:var(--fg); }
+  .reshoot textarea { width:100%; box-sizing:border-box; margin-top:6px;
+                      padding:8px; font:inherit; font-size:13px;
+                      border:1px solid var(--line); border-radius:6px;
+                      background:var(--bg); color:var(--fg); resize:vertical; }
+  .reshoot .note { margin:6px 0; font-size:11px; color:var(--muted); }
+  .reshoot .form button { padding:6px 10px; font-size:12px; cursor:pointer;
+                          border:1px solid var(--line); border-radius:6px;
+                          background:var(--bg); color:var(--fg); }
+  .reshoot .form button.go { background:var(--accent); border-color:var(--accent);
+                             color:#fff; }
   .confirm { border:1px solid var(--accent); border-radius:10px; padding:16px;
              margin-top:24px; }
   .confirm p { margin:0 0 12px; font-size:14px; }
@@ -191,6 +207,37 @@ export function renderReviewPage(
     });
   });
 
+  document.querySelectorAll(".reshoot").forEach((box) => {
+    const imageId = box.dataset.image;
+    const ask = box.querySelector("button.ask");
+    const form = box.querySelector(".form");
+    const text = box.querySelector("textarea");
+
+    ask.addEventListener("click", () => {
+      form.hidden = !form.hidden;
+      if (!form.hidden) text.focus();
+    });
+    box.querySelector("button.cancel").addEventListener("click", () => {
+      form.hidden = true;
+    });
+
+    box.querySelector("button.go").addEventListener("click", async () => {
+      const go = box.querySelector("button.go");
+      go.disabled = true;
+      const ok = await send("/api/review/" + TOKEN + "/regenerate", {
+        imageId,
+        prompt: text.value,
+      });
+      go.disabled = false;
+      if (ok) {
+        form.hidden = true;
+        toast("Asked for another. It'll appear here and in the thread.");
+        // Not a reload: the new shot does not exist yet, and the poll is
+        // what notices it arriving.
+      }
+    });
+  });
+
   const confirmButton = document.getElementById("confirm");
   if (confirmButton) {
     // Two taps, because this one cannot be undone and it sits on the same
@@ -257,7 +304,7 @@ function renderProduct(
         : ""
     }
     <div class="shots">
-      ${product.candidates.map((c) => renderCandidate(c, viewer)).join("\n")}
+      ${product.candidates.map((c) => renderCandidate(c, viewer, product)).join("\n")}
     </div>
   </section>`;
 }
@@ -265,6 +312,7 @@ function renderProduct(
 function renderCandidate(
   candidate: ReviewState["products"][number]["candidates"][number],
   viewer: Viewer,
+  product: ReviewState["products"][number],
 ): string {
   const label = STATE_LABEL[candidate.state] ?? candidate.state;
   const tagClass = ["approved", "discarded", "failed"].includes(candidate.state)
@@ -277,6 +325,12 @@ function renderCandidate(
 
   const decidable = viewer.canWrite && candidate.state !== "failed" && candidate.imageUrl;
 
+  // A reshoot is posted into the product's thread, and a product with no
+  // thread yet has nowhere to put it. Offered on a failed shot too — a shot
+  // that never arrived is exactly when you want to ask for another.
+  const reshootable =
+    viewer.canWrite && product.hasThread && !product.isPassThrough;
+
   return `<figure>
     ${visual}
     <figcaption>${esc(candidate.filename)}<br>
@@ -287,6 +341,19 @@ function renderCandidate(
         ? `<div class="acts" data-image="${esc(candidate.imageId)}">
              <button class="approve${candidate.state === "approved" ? " on" : ""}">Approve</button>
              <button class="discard${candidate.state === "discarded" ? " on" : ""}">Discard</button>
+           </div>`
+        : ""
+    }
+    ${
+      reshootable
+        ? `<div class="reshoot" data-image="${esc(candidate.imageId)}">
+             <button class="ask">Ask for another</button>
+             <div class="form" hidden>
+               <textarea rows="4" placeholder="Describe the shot you want.">${esc(candidate.prompt ?? "")}</textarea>
+               <p class="note">One shot, made from exactly what you write — nothing rewrites it. It joins this product's thread; nothing here is replaced.</p>
+               <button class="go">Make it</button>
+               <button class="cancel">Cancel</button>
+             </div>
            </div>`
         : ""
     }

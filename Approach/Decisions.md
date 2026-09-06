@@ -1450,3 +1450,60 @@ not a private setting. The post names who changed it and says it applies to the
 **Length is capped at 4,000 characters.** This text rides on every prompt call,
 so a long one is a per-product cost, and the refusal says so rather than just
 naming a limit.
+
+---
+
+## D48 — Regeneration is one manual shot, appended
+
+**Decision.** Every candidate on the overview page carries a third control,
+"Ask for another". It opens a box prefilled with the prompt that shot was made
+from. Submitting generates **one** image, from **exactly** the text written,
+and **appends** it to the product as a new slot.
+
+Three differences from the batch path, each deliberate:
+
+| | Batch | Reshoot |
+|---|---|---|
+| How many | 3 | **1** |
+| Prompt | written by LLM-B from the shot idea | **used as typed** |
+| Effect on existing shots | — | **none; appended** |
+
+**Why one and not three.** The batch makes three because nobody has said what
+they want yet, and variety is the answer to that. By the time someone is
+reshooting they have looked at three attempts and know exactly what was wrong.
+Making three more would be spending twice as much to throw two away.
+
+**Why the text is used verbatim.** Passing a considered instruction through a
+model that rewrites it is the one thing guaranteed to lose what made it
+considered. The brand block still applies — it is the image model's own
+context — but nothing rephrases what the person wrote.
+
+**Why appended, never substituted.** A reshoot is a new opinion about a shot,
+not a correction of the record. The photo it was asked from stays exactly where
+it was, decided or not. This is the same rule as D10.4: what was approved is
+what gets published, and nothing quietly changes underneath a decision.
+
+**Blocked until the product's thread exists.** The new photo is posted into
+that thread. Generating first and discovering there is nowhere to put it would
+be spending money to produce an orphan. `hasThread` is checked from
+`message_ts`, not from the permalink — the permalink call can fail while the
+thread exists perfectly well.
+
+**Blocked once the batch is delivered.** Adding to a handed-over batch would
+change what the web person was given.
+
+---
+
+## D49 — A reshoot joins the product's conversation
+
+**Decision.** When a regenerated image is ready, the worker posts it into the
+product's existing thread and redraws the product's channel line, rather than
+posting a second line about the same product.
+
+**Why.** D39 made the channel an index with one line per product. A second line
+for the same SKU would break exactly the adjacency that decision was for. The
+redraw keeps the line's counts true as the set grows.
+
+**The failure note is not reposted.** It is posted only when the thread is
+created, otherwise every append would repeat the same sentence about the same
+failures.
