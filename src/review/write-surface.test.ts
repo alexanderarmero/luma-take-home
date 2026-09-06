@@ -259,6 +259,35 @@ describe("confirming from the page", () => {
     expect(slack.pinned.has("C_REVIEW:1700000001.000100")).toBe(true);
   });
 
+  it("pins the confirmation, so the pins read as start and sign-off", async () => {
+    const { token, imageIds } = await reviewable();
+    const cookie = await signIn(ELLIE);
+    await decideAll(token, imageIds, cookie);
+
+    await post(token, "confirm", {}, cookie);
+    await flush();
+
+    const confirmation = slack.posts.find((p) => p.text.includes("is confirmed"))!;
+    expect(slack.pinned.has(`C_REVIEW:${confirmation.ts}`)).toBe(true);
+  });
+
+  it("still hands the batch over when pinning is refused", async () => {
+    // pins:write may not be granted, and by the time this runs the handover
+    // has already happened.
+    slack.pinMessage = async () => {
+      throw new Error("missing_scope");
+    };
+    const { batch, token, imageIds } = await reviewable();
+    const cookie = await signIn(ELLIE);
+    await decideAll(token, imageIds, cookie);
+
+    expect((await post(token, "confirm", {}, cookie)).status).toBe(200);
+    await flush();
+
+    expect(await getDeliveredBatchId(db)).toBe(batch.id);
+    expect(slack.uploads.some((u) => u.filename.endsWith(".csv"))).toBe(true);
+  });
+
   it("cannot be confirmed twice", async () => {
     const { token, imageIds } = await reviewable();
     const cookie = await signIn(ELLIE);

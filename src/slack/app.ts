@@ -590,13 +590,23 @@ export function createApp(deps: AppDeps) {
     if (deps.slack && deps.reviewChannelId) {
       const { slack, reviewChannelId } = deps;
       deps.defer(async () => {
-        await slack.postMessage({
+        const confirmation = await slack.postMessage({
           channel: reviewChannelId,
           text:
             `*Batch #${outcome.batchId} is confirmed* by <@${writer}>. ` +
             `${outcome.approved} ${outcome.approved === 1 ? "photo is" : "photos are"} ` +
             "ready to publish — run `/luma export` to download them.",
         });
+
+        // Pinned alongside the batch's opening message, so the pins read as
+        // the batch's two moments that matter: it started, and it was signed
+        // off. Failing to pin costs a bookmark, not the handover — which has
+        // already happened by the time this runs.
+        await slack
+          .pinMessage({ channel: reviewChannelId, ts: confirmation.ts })
+          .catch((error: unknown) => {
+            console.error("[confirm] could not pin the confirmation", error);
+          });
         if (deps.publicBaseUrl) {
           const csv = await buildApprovedCatalog(
             deps.db,
