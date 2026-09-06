@@ -24,6 +24,9 @@ export function buildHelp(isAdmin: boolean): string {
   }
   lines.push(
     "",
+    "_Each of these also exists as its own command, so Slack can suggest it " +
+      "as you type: `/luma-upload` is the same as `/luma upload`._",
+    "",
     "_Photos are reviewed on the overview page. Each product also gets a " +
       "thread here, so you can talk about a shot next to the shot._",
   );
