@@ -1544,3 +1544,29 @@ a modal outlives the permission that opened it.
 **Bounded waiting.** The poll gives up after five minutes and says so. A
 generation that never lands must still produce an answer, because a silent
 command is indistinguishable from a broken one.
+
+
+---
+
+## D51 — The zip arrives with the confirmation; `/luma export` is gone
+
+**Decision.** Confirming a batch posts the confirmation, pins it, and attaches
+the approved-catalog CSV and the zip into that message's thread. The `/luma
+export` command is removed.
+
+**Why.** The handoff *is* the moment the web person needs the files. A command
+they have to know exists and remember to run is a step at precisely the point
+where the old process lost things — step 7 of the brief is someone not
+trusting a folder and asking Slack which files are final. Making delivery
+something you *ask for* rebuilt a small version of that.
+
+**In the thread, not beside it.** The confirmation is pinned (D49b), so
+everything the handoff needs hangs off one pinned message rather than being
+scattered near it.
+
+**Posted after the pointer moves, not before.** `buildLatestExport` reads
+through the delivered pointer, so the zip is by construction the batch that was
+just confirmed. The handover is already durable in the database when the
+packaging is attempted.
+
+**Cost — see T19.** There is now exactly one route to the files.

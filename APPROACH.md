@@ -40,7 +40,7 @@ handing you the link. See revision notes on decisions 1 and 2.
 4. **Review** — one line per product in the channel, its three candidates posted into that product's thread, and a link to the overview page anchored at that product. The page shows a product's shots side by side, which is the shape of the decision; the thread is where *"no, too staged"* lands on the shot it is about. Approving and discarding happen on the page, behind a session (`/luma signin`).
 5. **Reshoot, if none of them are right** — "Ask for another" takes a prompt you write yourself and makes one more, appended to the product and posted into its thread. Nothing is replaced.
 6. **Confirm** — when every image has a yes or a no, a confirm panel appears on the page. It takes two taps and freezes the batch.
-7. **Deliver** — the web person runs one command and gets a zip. Every file named `HG-002_morning-kitchen_01.jpg`. No asking Slack which ones are final.
+7. **Deliver** — the zip arrives in the confirmation's thread, no command required. Every file named `HG-002_morning-kitchen_01.jpg`. No asking Slack which ones are final.
 
 ### What this actually fixes
 
@@ -227,7 +227,7 @@ prompt translation and ingest all move over unchanged; only the presentation lay
 | Overview page: every candidate for a product side by side | Where approving and discarding actually happen |
 | Magic-link sign-in, 24h sessions, an access list | The price of moving decisions off Slack |
 | Auto-completion + confirm | Turns "12 approved" into "we're finished" — the thing nobody can answer today |
-| Zip export by command | The web person's entire job; delivery doesn't exist without it |
+| Zip delivered with the confirmation | The web person's entire job; delivery doesn't exist without it, and it should not need asking for |
 | Deterministic filenames end-to-end | The direct fix for the named disaster |
 | Two CSV exports (generated, approved) | The only artefact that repairs the source spreadsheet |
 

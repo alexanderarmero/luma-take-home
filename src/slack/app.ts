@@ -57,7 +57,7 @@ import {
 import { confirmBatch } from "../decisions/confirm.js";
 import { decide } from "../decisions/decide.js";
 import { buildApprovedCatalog } from "../export/catalog.js";
-import { buildLatestExport } from "../export/zip.js";
+import { postExport } from "../export/deliver.js";
 import { renderReviewPage } from "../review/page.js";
 import { buildReviewState } from "../review/state.js";
 import type { ObjectStore } from "../storage/store.js";
@@ -200,54 +200,6 @@ export function createApp(deps: AppDeps) {
           console.error("[/luma upload] could not open modal", error);
           return c.json(ephemeral("I couldn't open the upload window — try again."));
         }
-      }
-
-      case "export": {
-        const { slack, store, reviewChannelId } = deps;
-        if (!slack || !store || !reviewChannelId) {
-          return c.json(ephemeral("Export isn't configured on this instance."));
-        }
-        // Fetching every approved image and zipping it is far too slow for the
-        // acknowledgement window.
-        deps.defer(async () => {
-          try {
-            const result = await buildLatestExport(deps.db, store);
-            if (!result.ok) {
-              await slack.postMessage({ channel: reviewChannelId, text: result.reason });
-              return;
-            }
-            await slack.uploadFile({
-            channel: reviewChannelId,
-            filename: result.filename,
-            title: result.filename,
-            bytes: result.bytes,
-            blocks: [
-              {
-                type: "section",
-                text: {
-                  type: "mrkdwn",
-                  text:
-                    `*Batch #${result.batchId} — ${result.count} approved ` +
-                    `${result.count === 1 ? "photo" : "photos"}.*\nEvery file is named ` +
-                    "for its product and shot idea. MANIFEST.txt lists them with " +
-                      "their checksums.",
-                  },
-                },
-              ],
-            });
-          } catch (error) {
-            // Silence here leaves the reviewer waiting for a zip that is never
-            // coming, with nothing to act on.
-            console.error("[/luma export] failed", error);
-            await slack.postMessage({
-              channel: reviewChannelId,
-              text:
-                "I couldn't build the export just now — the photos are all still " +
-                "stored, so try `/luma export` again in a moment.",
-            });
-          }
-        });
-        return c.json(ephemeral("Putting the zip together…"));
       }
 
       case "verify": {
@@ -595,7 +547,7 @@ export function createApp(deps: AppDeps) {
           text:
             `*Batch #${outcome.batchId} is confirmed* by <@${writer}>. ` +
             `${outcome.approved} ${outcome.approved === 1 ? "photo is" : "photos are"} ` +
-            "ready to publish — run `/luma export` to download them.",
+            "ready to publish — the zip is attached below.",
         });
 
         // Pinned alongside the batch's opening message, so the pins read as
@@ -615,9 +567,23 @@ export function createApp(deps: AppDeps) {
           );
           await slack.uploadFile({
             channel: reviewChannelId,
+            threadTs: confirmation.ts,
             filename: csv.filename,
             title: csv.filename,
             bytes: Buffer.from(csv.content, "utf8"),
+          });
+        }
+
+        // In the confirmation's own thread, so the pinned message carries
+        // everything the handoff needs rather than pointing at it.
+        if (deps.store) {
+          await postExport({
+            db: deps.db,
+            slack,
+            store: deps.store,
+            channel: reviewChannelId,
+            threadTs: confirmation.ts,
+            log: (message) => console.error(message),
           });
         }
       });
