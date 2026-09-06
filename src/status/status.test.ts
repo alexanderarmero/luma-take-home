@@ -127,7 +127,7 @@ describe("the summary", () => {
   it("mentions photos that could not be generated", async () => {
     const { images } = await batchWith([{ sku: "HG-002", slots: 2 }]);
     await setJobState(db, images[0]!.id, "failed", { failureCode: "content_moderated" });
-    expect(await status()).toContain("couldn't be generated");
+    expect(await status()).toContain("didn't arrive");
   });
 });
 

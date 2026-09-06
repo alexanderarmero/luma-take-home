@@ -82,7 +82,7 @@ describe("the product's line in the channel", () => {
       candidate(3),
     ]);
     expect(json(blocks)).toContain("2 photos");
-    expect(json(blocks)).toContain("1 couldn't be generated");
+    expect(json(blocks)).toContain("1 didn't arrive");
   });
 
   it("points the reader at the thread and at the page", () => {
@@ -142,6 +142,38 @@ describe("a candidate in the thread", () => {
     const blocks = buildCandidateBlocks(candidate(1, { prompt: null }));
     expect(json(blocks)).not.toContain("undefined");
     expect(json(blocks)).not.toContain('""');
+  });
+});
+
+describe("a pass-through that never arrived", () => {
+  // Nothing is generated for a product with no shot idea — its own photo is
+  // copied. Saying "the generation failed" sends the reader looking for a
+  // prompt problem that cannot exist, and these failures carry no Luma
+  // failure code, so the default wording was wrong twice over.
+  it("says the photo could not be copied, not generated", () => {
+    const text = explainFailure(null, { kind: "pass_through" });
+    expect(text).toContain("original photo couldn't be copied");
+    expect(text).not.toContain("generat");
+  });
+
+  it("carries the real error, because this one is ours to fix", () => {
+    const text = explainFailure(null, {
+      kind: "pass_through",
+      lastError: "download failed: HTTP 403",
+    });
+    expect(text).toContain("HTTP 403");
+  });
+
+  it("still explains a generated image by its Luma code", () => {
+    expect(explainFailure("content_moderated", { kind: "styled" })).toContain(
+      "content filter",
+    );
+  });
+
+  it("surfaces the underlying error when a generation has no code either", () => {
+    expect(
+      explainFailure(null, { kind: "styled", lastError: "socket hang up" }),
+    ).toContain("socket hang up");
   });
 });
 

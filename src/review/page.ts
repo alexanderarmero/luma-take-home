@@ -14,7 +14,7 @@ const STATE_LABEL: Record<string, string> = {
   ready: "awaiting a decision",
   approved: "approved",
   discarded: "discarded",
-  failed: "couldn't be generated",
+  failed: "didn't arrive",
 };
 
 /**
@@ -114,6 +114,18 @@ export function renderReviewPage(
   button.primary { padding:10px 16px; font-size:15px; cursor:pointer;
                    border:0; border-radius:8px; background:var(--accent); color:#fff; }
   button.primary.armed { background:#b42318; }
+  .filters { display:flex; flex-wrap:wrap; gap:6px; margin:16px 0 4px; }
+  .chip { padding:6px 10px; font:inherit; font-size:12px; cursor:pointer;
+          border:1px solid var(--line); border-radius:999px;
+          background:var(--bg); color:var(--muted); }
+  .chip b { color:var(--fg); font-weight:600; }
+  .chip:hover { border-color:var(--accent); }
+  .chip.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .chip.on b { color:#fff; }
+  .chip[disabled] { opacity:.4; cursor:default; }
+  .chip[disabled]:hover { border-color:var(--line); }
+  .empty { color:var(--muted); font-size:14px; padding:24px 0; }
+  figure[hidden], section.product[hidden] { display:none; }
   #toast { position:fixed; left:50%; bottom:20px; transform:translateX(-50%);
            background:var(--fg); color:var(--bg); padding:10px 16px;
            border-radius:8px; font-size:14px; display:none; max-width:90vw; }
@@ -131,7 +143,7 @@ export function renderReviewPage(
     <span><b>${totals.approved}</b> approved</span>
     <span><b>${totals.discarded}</b> discarded</span>
     <span><b>${totals.pending}</b> still to review</span>
-    ${totals.failed > 0 ? `<span><b>${totals.failed}</b> couldn't be generated</span>` : ""}
+    ${totals.failed > 0 ? `<span><b>${totals.failed}</b> didn't arrive</span>` : ""}
     <span>$${state.spentUsd.toFixed(2)} spent</span>
   </div>
   ${
@@ -139,6 +151,27 @@ export function renderReviewPage(
       ? `<div class="live"><span class="dot"></span>Still generating — this page updates itself.</div>`
       : ""
   }
+
+  <div class="filters" role="group" aria-label="Show only">
+    ${[
+      { key: "all", label: "All", count: totals.images },
+      { key: "ready", label: "Awaiting a decision", count: totals.pending },
+      { key: "approved", label: "Approved", count: totals.approved },
+      { key: "discarded", label: "Discarded", count: totals.discarded },
+      { key: "passthrough", label: "No shot idea", count: totals.passThrough },
+      { key: "failed", label: "Didn't arrive", count: totals.failed },
+    ]
+      // Shown at zero rather than hidden, and disabled: a filter that appears
+      // and disappears as decisions land is a moving target to aim at.
+      .map(
+        (f) =>
+          `<button class="chip${f.key === "all" ? " on" : ""}" data-filter="${f.key}"${
+            f.count === 0 && f.key !== "all" ? " disabled" : ""
+          }>${f.label} <b>${f.count}</b></button>`,
+      )
+      .join("\n    ")}
+  </div>
+  <p class="empty" hidden>Nothing matches that filter.</p>
 
   ${state.products.map((p) => renderProduct(p, viewer)).join("\n")}
 
@@ -206,6 +239,50 @@ export function renderReviewPage(
       });
     });
   });
+
+  // Filtering happens here rather than on the server: a filter that costs a
+  // page load is one people stop using, and the whole batch is already on the
+  // page. A product with nothing left showing is hidden too, so the headings
+  // do not stack up empty.
+  const chips = document.querySelectorAll(".chip");
+  const emptyNote = document.querySelector(".empty");
+
+  function applyFilter(name) {
+    let shown = 0;
+
+    document.querySelectorAll("section.product").forEach((section) => {
+      let visibleHere = 0;
+
+      section.querySelectorAll("figure").forEach((figure) => {
+        const state = figure.dataset.state;
+        const passthrough = figure.dataset.passthrough === "1";
+        const match =
+          name === "all" ? true :
+          name === "passthrough" ? passthrough :
+          state === name;
+
+        figure.hidden = !match;
+        if (match) visibleHere += 1;
+      });
+
+      section.hidden = visibleHere === 0;
+      shown += visibleHere;
+    });
+
+    if (emptyNote) emptyNote.hidden = shown > 0;
+    chips.forEach((chip) => chip.classList.toggle("on", chip.dataset.filter === name));
+    // Survives the reload a decision triggers, so filtering and deciding are
+    // not mutually exclusive.
+    try { sessionStorage.setItem("luma-filter-" + TOKEN, name); } catch (_) {}
+  }
+
+  chips.forEach((chip) => {
+    chip.addEventListener("click", () => applyFilter(chip.dataset.filter));
+  });
+
+  let restored = "all";
+  try { restored = sessionStorage.getItem("luma-filter-" + TOKEN) || "all"; } catch (_) {}
+  applyFilter(restored);
 
   document.querySelectorAll(".reshoot").forEach((box) => {
     const imageId = box.dataset.image;
@@ -331,7 +408,7 @@ function renderCandidate(
   const reshootable =
     viewer.canWrite && product.hasThread && !product.isPassThrough;
 
-  return `<figure>
+  return `<figure data-state="${esc(candidate.state)}"${candidate.isPassThrough ? ' data-passthrough="1"' : ""}>
     ${visual}
     <figcaption>${esc(candidate.filename)}<br>
       <span class="tag ${tagClass}">${esc(label)}</span>

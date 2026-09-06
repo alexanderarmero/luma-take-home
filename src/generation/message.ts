@@ -1,4 +1,4 @@
-import type { ProductImage } from "../db/repository.js";
+import type { ImageKind, ProductImage } from "../db/repository.js";
 import type { Block } from "../slack/client.js";
 
 /** Why a candidate never arrived, in words the team can act on. */
@@ -11,8 +11,30 @@ const FAILURE_REASONS: Record<string, string> = {
   invalid_request: "the request was rejected as invalid",
 };
 
-export function explainFailure(failureCode: string | null): string {
-  if (!failureCode) return "the generation failed";
+/**
+ * Why a photo never arrived, in words that match what was actually attempted.
+ *
+ * A pass-through is a product with no shot idea: nothing is generated for it,
+ * its original photo is copied. Telling someone it "couldn't be generated"
+ * sends them looking for a prompt problem that cannot exist — and since these
+ * failures carry no Luma failure code, the default wording was wrong twice
+ * over.
+ */
+export function explainFailure(
+  failureCode: string | null,
+  options: { kind?: ImageKind; lastError?: string | null } = {},
+): string {
+  if (options.kind === "pass_through") {
+    // Ours to fix, so the detail is worth showing rather than summarising.
+    return options.lastError
+      ? `the original photo couldn't be copied — ${options.lastError}`
+      : "the original photo couldn't be copied";
+  }
+  if (!failureCode) {
+    return options.lastError
+      ? `the generation failed — ${options.lastError}`
+      : "the generation failed";
+  }
   return FAILURE_REASONS[failureCode] ?? `the generation failed (${failureCode})`;
 }
 
@@ -60,7 +82,7 @@ export function buildProductChannelMessage(input: ProductChannelInput): {
         : `${decided} of ${usable.length} decided`,
   );
   if (failed.length > 0) {
-    counts.push(`${failed.length} couldn't be generated`);
+    counts.push(`${failed.length} didn't arrive`);
   }
 
   const text = `${sku} · ${productName}`;
@@ -129,7 +151,13 @@ export function buildCandidateBlocks(image: ProductImage): Block[] {
 
 /** Note posted into the thread for candidates that never arrived. */
 export function buildFailureNote(failed: ProductImage[], total: number): Block[] {
-  const reasons = [...new Set(failed.map((f) => explainFailure(f.failureCode)))];
+  const reasons = [
+    ...new Set(
+      failed.map((f) =>
+        explainFailure(f.failureCode, { kind: f.kind, lastError: f.lastError }),
+      ),
+    ),
+  ];
   return [
     {
       type: "context",
@@ -137,7 +165,10 @@ export function buildFailureNote(failed: ProductImage[], total: number): Block[]
         {
           type: "mrkdwn",
           text:
-            `:warning: ${failed.length} of ${total} couldn't be generated — ` +
+            // "didn't arrive" rather than "couldn't be generated": a
+            // pass-through was never being generated, and the per-reason text
+            // below says what was actually attempted.
+            `:warning: ${failed.length} of ${total} didn't arrive — ` +
             `${reasons.join("; ")}.`,
         },
       ],

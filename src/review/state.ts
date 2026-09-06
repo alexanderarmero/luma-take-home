@@ -1,3 +1,4 @@
+import { explainFailure } from "../generation/message.js";
 import type { SqlClient } from "../db/client.js";
 import {
   batchCounts,
@@ -11,6 +12,8 @@ export type CandidateState = "generating" | "ready" | "approved" | "discarded" |
 export interface CandidateView {
   imageId: string;
   filename: string;
+  /** No shot idea was given, so this is the original photo, unchanged. */
+  isPassThrough: boolean;
   /** Absent until the image has been stored. */
   imageUrl: string | null;
   prompt: string | null;
@@ -50,6 +53,8 @@ export interface ReviewState {
     discarded: number;
     pending: number;
     failed: number;
+    /** Products with no shot idea: their original photo, unchanged. */
+    passThrough: number;
   };
   spentUsd: number;
   /** Changes whenever anything the page shows has changed. */
@@ -91,6 +96,7 @@ export async function buildReviewState(
   let failed = 0;
   let generating = 0;
   let generated = 0;
+  let passThrough = 0;
 
   const views: ProductView[] = products.map((product) => {
     const isPassThrough = product.images.some((i) => i.kind === "pass_through");
@@ -103,6 +109,8 @@ export async function buildReviewState(
       // Billed once submitted, not once the row exists.
       if (image.kind === "styled" && image.jobState !== "pending_submit") {
         generated += 1;
+      } else if (image.kind === "pass_through") {
+        passThrough += 1;
       }
 
       return {
@@ -113,7 +121,16 @@ export async function buildReviewState(
           : null,
         prompt: image.prompt,
         state,
-        failureReason: image.failureCode,
+        // In words matching what was actually attempted: a pass-through is
+        // copied, never generated, and carries no Luma failure code.
+        failureReason:
+          state === "failed"
+            ? explainFailure(image.failureCode, {
+                kind: image.kind,
+                lastError: image.lastError,
+              })
+            : null,
+        isPassThrough: image.kind === "pass_through",
       };
     });
 
@@ -141,6 +158,7 @@ export async function buildReviewState(
       discarded: counts.discarded,
       pending: counts.pending,
       failed,
+      passThrough,
     },
     // Only generated images cost anything; pass-throughs are free.
     spentUsd: Number((generated * PRICING.imageEdit[model]).toFixed(4)),
