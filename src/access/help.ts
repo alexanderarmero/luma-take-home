@@ -10,6 +10,7 @@ export const COMMANDS: HelpEntry[] = [
   { command: "/luma status", what: "Where the latest batch stands, and which products still need a decision." },
   { command: "/luma signin", what: "Get a private link that lets you approve, discard and confirm on the overview page. Lasts a day." },
   { command: "/luma export", what: "Download the approved photos of the latest confirmed batch as a zip." },
+  { command: "/luma generate", what: "Try an idea on one photo of your own. Comes back in your conversation with me — not part of any batch." },
   { command: "/luma system-prompt", what: "See the wording that turns a shot idea into three prompts, and change it. Applies to the next batch." },
   { command: "/luma access", what: "See and change who can approve, discard and confirm.", adminOnly: true },
   { command: "/luma help", what: "This list." },

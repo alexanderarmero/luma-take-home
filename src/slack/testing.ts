@@ -18,6 +18,8 @@ export interface FakeSlack extends SlackClient {
   }>;
   /** Contents returned by downloadFile, keyed by URL. */
   files: Map<string, string>;
+  /** DM channels opened, in order. */
+  dms: string[];
   reset(): void;
 }
 
@@ -38,6 +40,7 @@ export function createFakeSlack(): FakeSlack {
     views: [],
     viewUpdates: [],
     files: new Map(),
+    dms: [],
 
     postMessage: async (input) => {
       fake.posts.push(input);
@@ -70,6 +73,20 @@ export function createFakeSlack(): FakeSlack {
         throw new Error(`no fake file registered for ${url}`);
       }
       return content;
+    },
+
+    downloadFileBytes: async (url) => {
+      const content = fake.files.get(url);
+      if (content === undefined) {
+        throw new Error(`no fake file registered for ${url}`);
+      }
+      return { bytes: Buffer.from(content), contentType: "image/jpeg" };
+    },
+
+    openDirectMessage: async (userId) => {
+      const channel = `D_${userId}`;
+      fake.dms.push(channel);
+      return channel;
     },
 
     reset() {

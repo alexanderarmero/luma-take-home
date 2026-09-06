@@ -1507,3 +1507,40 @@ redraw keeps the line's counts true as the set grows.
 **The failure note is not reposted.** It is posted only when the thread is
 created, otherwise every append would repeat the same sentence about the same
 failures.
+
+---
+
+## D50 — `/luma generate`: one photo, in your own conversation
+
+**Decision.** `/luma generate` opens a modal taking one image and one prompt.
+The result is posted to the asker's own conversation with the bot, not to the
+review channel. It creates no batch, no image row, and no job — it touches none
+of the pipeline's state.
+
+**Why it is separate from everything else.** This is the "would this even look
+good?" gesture, made before anyone commits a shot idea to the catalog. Putting
+it in the review channel would fill the place where reviewable work lives with
+work nobody is reviewing. Writing it to `images` would put a try-out one bug
+away from a handoff. Keeping it entirely outside the pipeline is what makes
+that impossible rather than merely unlikely.
+
+**It is labelled as disposable.** The result looks exactly like a real
+candidate, so the message carrying it says plainly that it is not part of any
+batch and will not be published.
+
+**Two storage namespaces, not one.** Luma fetches the source itself, and a
+Slack file URL needs our bot token, so the bytes have to be served from
+somewhere public. They go to `scratch/` and are served by `/src/:id`, which
+never consults the database; batch images stay in `images/` behind `/img/:id`,
+which does. Neither route can reach the other's objects — a property of the
+prefixes rather than of a check somebody has to remember to write.
+
+**Requires `im:write`**, added to the app manifest in `scripts/setup.sh`.
+
+**Same access as approving.** It spends money, so it is gated on the write
+list rather than being open to the channel — and re-checked on submit, because
+a modal outlives the permission that opened it.
+
+**Bounded waiting.** The poll gives up after five minutes and says so. A
+generation that never lands must still produce an answer, because a silent
+command is indistinguishable from a broken one.

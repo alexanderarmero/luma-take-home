@@ -66,6 +66,22 @@ export interface SlackClient {
   /** Fetches a file Slack is hosting privately. Returns its text. */
   downloadFile(urlPrivate: string): Promise<string>;
   /**
+   * The same download, as bytes.
+   *
+   * Separate from `downloadFile` because that one guards against Slack's HTML
+   * sign-in page by inspecting the text, and an image is not text.
+   */
+  downloadFileBytes(
+    urlPrivate: string,
+  ): Promise<{ bytes: Buffer; contentType: string }>;
+  /**
+   * The bot's own conversation with one person.
+   *
+   * Needs the `im:write` scope. Used for answers that belong to the person who
+   * asked rather than to the channel.
+   */
+  openDirectMessage(userId: string): Promise<string>;
+  /**
    * The private URL of an uploaded file.
    *
    * `files.completeUploadExternal` returns only `{id, title}`, so anything
@@ -254,6 +270,35 @@ export function createSlackClient(options: SlackClientOptions): SlackClient {
      * HTML sign-in page rather than an error — which would surface much later
      * as a baffling parse failure naming HTML as the CSV header.
      */
+    async downloadFileBytes(urlPrivate) {
+      const response = await doFetch(urlPrivate, { headers: authHeader });
+      if (!response.ok) {
+        throw new Error(`Slack file download failed: HTTP ${response.status}`);
+      }
+
+      const contentType = response.headers.get("content-type") ?? "";
+      if (contentType.includes("text/html")) {
+        // Slack answers an unauthorised download with its sign-in page and a
+        // 200, so the status alone would make a lost scope look like success.
+        throw new Error(
+          "Slack returned its sign-in page instead of the file — the bot is " +
+            "probably missing the files:read scope.",
+        );
+      }
+
+      return {
+        bytes: Buffer.from(await response.arrayBuffer()),
+        contentType: contentType || "image/jpeg",
+      };
+    },
+
+    async openDirectMessage(userId) {
+      const body = await callJson("conversations.open", { users: userId });
+      const channel = body.channel as { id?: string } | undefined;
+      if (!channel?.id) throw new Error("Slack did not return a DM channel");
+      return channel.id;
+    },
+
     async downloadFile(urlPrivate) {
       const response = await doFetch(urlPrivate, { headers: authHeader });
       if (!response.ok) {

@@ -10,6 +10,14 @@ export interface PutInput {
   contentType: string;
   /** Carried as metadata so a direct fetch can still name the file. */
   filename: string;
+  /**
+   * Which namespace the object belongs to.
+   *
+   * Two disjoint prefixes rather than one, so the route that serves one-off
+   * source photographs can never reach a batch's images and the route that
+   * serves batch images can never reach a scratch upload.
+   */
+  prefix?: "images" | "scratch";
 }
 
 export interface FetchedObject {
