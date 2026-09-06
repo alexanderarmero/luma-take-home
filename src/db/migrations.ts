@@ -212,9 +212,9 @@ export const MIGRATIONS: ReadonlyArray<{ name: string; sql: string }> = [
       -- Retried filter if something remembers.
       alter table image_jobs add column retries integer not null default 0;
 
-      -- The batch's opening message, kept so it can be unpinned when the
-      -- batch is handed over. A pin nobody removes is just clutter with a
-      -- longer half-life.
+      -- The batch's opening message. Pinned when it starts and left pinned:
+      -- the channel's pins become a record of which batches ran, and a
+      -- confirmed batch is still one someone may need to find again.
       alter table batches add column intro_message_ts text;
     `,
   },

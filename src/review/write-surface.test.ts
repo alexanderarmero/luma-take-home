@@ -243,11 +243,12 @@ describe("confirming from the page", () => {
     expect(slack.uploads.some((u) => u.filename.endsWith(".csv"))).toBe(true);
   });
 
-  it("lifts the batch's pin, so pins do not become a history of everything", async () => {
+  it("leaves the batch's pin in place, so the pins read as a history", async () => {
+    // Deliberate: a confirmed batch is still the batch someone may need to
+    // find again, and the pinned list is the cheapest record of what ran.
     const { batch, token, imageIds } = await reviewable();
     const cookie = await signIn(ELLIE);
 
-    // Stands in for the pin the batch's opening message gets when it starts.
     await setIntroMessageTs(db, batch.id, "1700000001.000100");
     slack.pinned.add("C_REVIEW:1700000001.000100");
 
@@ -255,7 +256,7 @@ describe("confirming from the page", () => {
     expect((await post(token, "confirm", {}, cookie)).status).toBe(200);
     await flush();
 
-    expect(slack.pinned.has("C_REVIEW:1700000001.000100")).toBe(false);
+    expect(slack.pinned.has("C_REVIEW:1700000001.000100")).toBe(true);
   });
 
   it("cannot be confirmed twice", async () => {

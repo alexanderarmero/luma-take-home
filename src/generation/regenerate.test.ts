@@ -310,7 +310,10 @@ describe("the control on the page", () => {
     expect(html).not.toContain("Ask for another");
   });
 
-  it("appears once it does, prefilled with the prompt it came from", async () => {
+  it("appears once it does, prefilled with the shot idea", async () => {
+    // The concept, not one candidate's expanded prompt: asking for another
+    // shot is a statement about the idea, and the shot idea is the half a
+    // person wrote themselves.
     const { token } = await seeded();
     const html = renderReviewPage((await buildReviewState(db, token))!, token, {
       canWrite: true,
@@ -319,6 +322,43 @@ describe("the control on the page", () => {
     expect(html).toContain("Ask for another");
     expect(html).toContain("morning kitchen counter");
     expect(html).toContain("nothing rewrites it");
+  });
+
+  it("offers exactly one, however many candidates the product has", async () => {
+    // Three shots of one idea is one decision about the idea, not three.
+    const { token, images } = await seeded();
+    expect(images.length).toBeGreaterThan(1);
+
+    const html = renderReviewPage((await buildReviewState(db, token))!, token, {
+      canWrite: true,
+    });
+    expect(html.match(/Ask for another/g)).toHaveLength(1);
+    expect(html.match(/class="reshoot"/g)).toHaveLength(1);
+  });
+
+  it("puts it in the product's header, beside the name", async () => {
+    const { token } = await seeded();
+    const html = renderReviewPage((await buildReviewState(db, token))!, token, {
+      canWrite: true,
+    });
+
+    const head = html.slice(html.indexOf('class="phead"'));
+    expect(head.slice(0, 400)).toContain("Ask for another");
+    // Before the photographs, not among them.
+    expect(html.indexOf("Ask for another")).toBeLessThan(html.indexOf('class="shots"'));
+  });
+
+  it("draws a placeholder the moment one is asked for", async () => {
+    // The photo does not exist yet and the next poll may be fifteen seconds
+    // away; without a cue, asking looks like nothing happened.
+    const { token } = await seeded();
+    const html = renderReviewPage((await buildReviewState(db, token))!, token, {
+      canWrite: true,
+    });
+
+    expect(html).toContain('placeholder.className = "pending"');
+    expect(html).toContain("generating…");
+    expect(html).toContain('applyFilter("all")');
   });
 
   it("is offered on a product that never had a shot idea", async () => {

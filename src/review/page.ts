@@ -114,6 +114,17 @@ export function renderReviewPage(
   button.primary { padding:10px 16px; font-size:15px; cursor:pointer;
                    border:0; border-radius:8px; background:var(--accent); color:#fff; }
   button.primary.armed { background:#b42318; }
+  .phead { display:flex; align-items:baseline; justify-content:space-between;
+           gap:12px; }
+  .phead h2 { margin:0; }
+  .phead button.ask { flex:none; padding:6px 10px; font:inherit; font-size:12px;
+                      cursor:pointer; border:1px solid var(--line);
+                      border-radius:6px; background:var(--bg);
+                      color:var(--muted); white-space:nowrap; }
+  .phead button.ask:hover { border-color:var(--accent); color:var(--fg); }
+  figure.pending .ph { border-style:dashed; }
+  @keyframes pulse { 0%,100% { opacity:.45 } 50% { opacity:.9 } }
+  figure.pending .ph { animation:pulse 1.4s ease-in-out infinite; }
   .filters { display:flex; flex-wrap:wrap; gap:6px; margin:16px 0 4px; }
   .chip { padding:6px 10px; font:inherit; font-size:12px; cursor:pointer;
           border:1px solid var(--line); border-radius:999px;
@@ -298,7 +309,8 @@ export function renderReviewPage(
 
   document.querySelectorAll(".reshoot").forEach((box) => {
     const imageId = box.dataset.image;
-    const ask = box.querySelector("button.ask");
+    const section = box.closest("section.product");
+    const ask = section.querySelector(".phead button.ask");
     const form = box.querySelector(".form");
     const text = box.querySelector("textarea");
 
@@ -318,14 +330,35 @@ export function renderReviewPage(
         prompt: text.value,
       });
       go.disabled = false;
-      if (ok) {
-        form.hidden = true;
-        toast("Asked for another. It'll appear here and in the thread.");
-        // Not a reload: the new shot does not exist yet, and the poll is
-        // what notices it arriving.
-      }
+      if (!ok) return;
+
+      form.hidden = true;
+
+      // Drawn immediately, beside the shots it will join. The photo does not
+      // exist yet and the next poll may be fifteen seconds away — without
+      // this, asking for another looks like nothing happened.
+      const shots = section.querySelector(".shots");
+      const placeholder = document.createElement("figure");
+      placeholder.className = "pending";
+      placeholder.dataset.state = "generating";
+      placeholder.innerHTML =
+        '<div class="ph">generating…</div>' +
+        '<figcaption>' + escapeHtml(text.value.slice(0, 60)) +
+        '<br><span class="tag">generating…</span></figcaption>';
+      shots.appendChild(placeholder);
+
+      // A placeholder hidden by the active filter would defeat the point of
+      // drawing one, so the view goes back to showing everything.
+      applyFilter("all");
+      toast("Asked for another. It'll appear here and in the thread.");
     });
   });
+
+  function escapeHtml(value) {
+    const div = document.createElement("div");
+    div.textContent = value;
+    return div.innerHTML;
+  }
 
   const confirmButton = document.getElementById("confirm");
   if (confirmButton) {
@@ -383,17 +416,48 @@ function renderProduct(
     ? "No shot idea was given — the original photo, unchanged."
     : `"${product.shotIdea ?? ""}"`;
 
+  // A reshoot is posted into the product's thread, and a product with no
+  // thread yet has nowhere to put it. Offered on a product with no shot idea
+  // too: having no idea written down is the most likely reason to want one.
+  //
+  // One per product, not one per candidate. Asking for another shot is a
+  // statement about the concept, not about the particular photo you happened
+  // to be looking at when you decided none of them worked.
+  const anchor = product.candidates[0]?.imageId ?? "";
+  const reshootable = viewer.canWrite && product.hasThread && anchor !== "";
+
   // Anchored by SKU so a Slack message can link straight to this product.
   return `<section class="product" id="p-${esc(product.sku)}">
-    <h2>${esc(product.sku)} · ${esc(product.productName)}</h2>
+    <div class="phead">
+      <h2>${esc(product.sku)} · ${esc(product.productName)}</h2>
+      ${
+        reshootable
+          ? `<button class="ask" data-image="${esc(anchor)}">Ask for another</button>`
+          : ""
+      }
+    </div>
     <p class="idea">${esc(idea)}</p>
+    ${
+      reshootable
+        ? `<div class="reshoot" data-image="${esc(anchor)}">
+             <div class="form" hidden>
+               <textarea rows="3" placeholder="Describe the shot you want.">${esc(
+                 product.shotIdea ?? "",
+               )}</textarea>
+               <p class="note">One shot, made from exactly what you write — nothing rewrites it. It joins this product's thread; nothing here is replaced.</p>
+               <button class="go">Make it</button>
+               <button class="cancel">Cancel</button>
+             </div>
+           </div>`
+        : ""
+    }
     ${
       product.threadUrl
         ? `<p><a class="thread" href="${esc(product.threadUrl)}" target="_blank" rel="noopener">Open Slack thread</a></p>`
         : ""
     }
     <div class="shots">
-      ${product.candidates.map((c) => renderCandidate(c, viewer, product)).join("\n")}
+      ${product.candidates.map((c) => renderCandidate(c, viewer)).join("\n")}
     </div>
   </section>`;
 }
@@ -401,7 +465,6 @@ function renderProduct(
 function renderCandidate(
   candidate: ReviewState["products"][number]["candidates"][number],
   viewer: Viewer,
-  product: ReviewState["products"][number],
 ): string {
   const label = STATE_LABEL[candidate.state] ?? candidate.state;
   const tagClass = ["approved", "discarded", "failed"].includes(candidate.state)
@@ -419,11 +482,6 @@ function renderCandidate(
   // at all was what stranded a batch: it could never be settled, and it could
   // never be chased either.
   const failed = viewer.canWrite && candidate.state === "failed";
-
-  // A reshoot is posted into the product's thread, and a product with no
-  // thread yet has nowhere to put it. Offered on a product with no shot idea
-  // too: having no idea written down is the most likely reason to want one.
-  const reshootable = viewer.canWrite && product.hasThread;
 
   return `<figure data-state="${esc(candidate.state)}"${
     candidate.isPassThrough ? ' data-passthrough="1"' : ""
@@ -445,19 +503,6 @@ function renderCandidate(
         ? `<div class="acts failed-acts" data-image="${esc(candidate.imageId)}">
              <button class="retry">Try again</button>
              <button class="discard">Discard</button>
-           </div>`
-        : ""
-    }
-    ${
-      reshootable
-        ? `<div class="reshoot" data-image="${esc(candidate.imageId)}">
-             <button class="ask">Ask for another</button>
-             <div class="form" hidden>
-               <textarea rows="4" placeholder="Describe the shot you want.">${esc(candidate.prompt ?? "")}</textarea>
-               <p class="note">One shot, made from exactly what you write — nothing rewrites it. It joins this product's thread; nothing here is replaced.</p>
-               <button class="go">Make it</button>
-               <button class="cancel">Cancel</button>
-             </div>
            </div>`
         : ""
     }
