@@ -551,8 +551,9 @@ wall; it does not move it. The rest is the honest ceiling of this design.
 
 ## Getting in
 
-- **Live URL:** _TBD_
-- **Slack workspace invite:** _TBD_
+- **Slack workspace invite:** https://join.slack.com/t/lumatakehomec-wxc5969/shared_invite/zt-496j6uw4w-kR~FM~aGmS7dp~foUweX_Q
+
+- **github repo**: https://github.com/alexanderarmero/luma-take-home
 
 **Start here.** Open the **Luma Shots** app in Slack and read its **Home** tab — it is a
 complete walkthrough, from setting up the channel to your first upload. `/luma help` lists
@@ -564,6 +565,39 @@ every command.
   Generate.
 - **To decide on anything:** `/luma signin` gives you a link that lasts a day. Reading the
   overview page needs nothing at all.
+
+### Access during the demo — a deliberate, temporary weakening
+
+**Right now, anyone holding a review link can approve, discard, reshoot and confirm.
+No sign-in.** That is not the design; it is a switch turned on for this submission,
+and this section exists so it is not mistaken for one.
+
+**Why.** The people assessing this project are not members of the Slack workspace, so
+they cannot run `/luma signin` — and a review surface you can only read is not a review
+surface. Being able to actually decide something is most of what there is to look at.
+
+**What is switched off.** Exactly one thing: the check in `resolveWriter` that a request
+carries a session cookie belonging to somebody on the write-access list. Nothing was
+deleted to achieve it. Magic links, 24-hour sessions, the `write_access` table and
+`/luma access` are all still present, still wired up, and still covered by their own
+tests — every test in `src/review/write-surface.test.ts` continues to exercise the real
+gate, because the switch defaults to *off* everywhere except the deployed service.
+
+**What is not switched off.** Slack commands are untouched. `/luma access`,
+`/luma system-prompt` and `/luma generate` still check the access list, because those
+require a Slack identity anyway and there is no reviewer story that needs them opened.
+
+**How it stays honest.** Decisions made this way are recorded against the actor
+`demo-reviewer` rather than a plausible Slack id, so the audit trail says *"somebody with
+the link did this"* — which is what happened. The page's footer says the same thing out
+loud, because anyone deciding on real photographs should know whether the system knows
+who they are.
+
+**To restore it:** set `OPEN_REVIEW_ACCESS=false` and redeploy. One variable, no code
+change. It is opt-*out* rather than opt-in purely so the demo works without anyone having
+to remember to set something; reversing that default in
+[`src/config/config.ts`](./src/config/config.ts) is the single edit that makes this a
+normal, gated deployment again.
 
 ---
 

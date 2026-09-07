@@ -1889,3 +1889,38 @@ photograph that was never the problem.
 time's bytes in the store, so that put Approve on a shot mid-regeneration. It
 now states what must be true — an image, and a state of ready, approved or
 discarded.
+
+---
+
+## D60 — TEMPORARY: open write access on the review page for the demo
+
+**Decision.** `resolveWriter` returns a fixed `demo-reviewer` identity when
+`OPEN_REVIEW_ACCESS` is not `false`, so anyone holding a review link can
+approve, discard, reshoot and confirm without signing in. Slack commands are
+untouched.
+
+**Why.** The people assessing this project are not in the Slack workspace and
+cannot run `/luma signin`. A review surface you can only read is not a review
+surface, and being able to decide something is most of what there is to look at.
+
+**Why a switch rather than deleting the check.** D42 is one of the more
+considered decisions here — two credentials answering two different questions,
+re-checked on every write so a revocation bites immediately. Deleting it to
+make a demo work would throw away the thing worth showing. The gate is intact,
+its tests still run against it, and the switch defaults to *off* everywhere
+except the deployed service.
+
+**Why the actor is `demo-reviewer` and not a plausible id.** The audit trail
+should say what actually happened: somebody with the link did this, and we do
+not know who. A synthetic Slack id would read as a person and quietly corrupt
+the one record that exists of who decided what.
+
+**Why the page says so.** Anyone deciding on real photographs should know
+whether the system knows who they are. It currently does not, and hiding that
+would be the wrong kind of polish.
+
+**Cost.** The link is now the whole credential. Anyone it is forwarded to can
+confirm a batch — which is irreversible — so for the duration of the demo the
+review token has to be treated as a secret rather than as a convenience. That
+is precisely the property D42 was written to avoid, which is why this is
+temporary and why it is documented in `APPROACH.md` rather than only here.

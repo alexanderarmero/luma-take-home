@@ -30,6 +30,13 @@ const STATE_LABEL: Record<string, string> = {
 export interface Viewer {
   /** Whether this request may approve, discard and confirm. */
   canWrite: boolean;
+  /**
+   * TEMPORARY: they may act only because the demo lets everyone act.
+   *
+   * Said out loud on the page. Someone deciding on real photographs should
+   * know whether the system knows who they are, and right now it does not.
+   */
+  openAccess?: boolean;
 }
 
 export function renderReviewPage(
@@ -206,9 +213,13 @@ export function renderReviewPage(
 
   <footer>
     ${
-      viewer.canWrite
-        ? "You're signed in — your decisions save as you make them."
-        : "Read-only. Run <code>/luma signin</code> in Slack to get a link that lets you decide."
+      viewer.openAccess
+        ? "<b>Open review.</b> Anyone with this link can approve and discard — " +
+          "a temporary setting so reviewers can try it without a Slack account. " +
+          "Normally this needs <code>/luma signin</code> and a place on the access list."
+        : viewer.canWrite
+          ? "You're signed in — your decisions save as you make them."
+          : "Read-only. Run <code>/luma signin</code> in Slack to get a link that lets you decide."
     }
   </footer>
 </div>

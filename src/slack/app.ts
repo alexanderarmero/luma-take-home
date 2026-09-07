@@ -105,6 +105,14 @@ export interface AppDeps {
   /** Turns a shot idea into several distinct generation prompts. */
   promptWriterFor?: (brand: BrandContext, direction: string) => PromptWriter;
   /**
+   * TEMPORARY: lets anyone holding a review link approve and discard.
+   *
+   * Defaults to false so every test in this repo exercises the real gate. It
+   * is switched on at the composition root, which keeps "who may act?" a
+   * question with one place to look.
+   */
+  openWriteAccess?: boolean;
+  /**
    * Names a modal we push but never learn the id of.
    *
    * Injected so a test can predict it; in production it is random, because
@@ -120,6 +128,14 @@ export interface AppDeps {
 function defaultExternalId(): string {
   return `luma-${randomUUID()}`;
 }
+
+/**
+ * Recorded as the actor for any decision made while write access is open.
+ *
+ * Deliberately not a plausible Slack id: the audit trail should say "somebody
+ * with the link did this", because that is what happened.
+ */
+const DEMO_REVIEWER = "demo-reviewer";
 
 /** Slack renders this only to the person who typed the command. */
 function ephemeral(text: string) {
@@ -488,6 +504,20 @@ export function createApp(deps: AppDeps) {
   const resolveWriter = async (
     c: { req: { raw: Request } },
   ): Promise<string | null> => {
+    // TEMPORARY, FOR THE TAKE-HOME DEMO ONLY.
+    //
+    // Anyone holding the review link may approve, discard, reshoot and
+    // confirm. The people assessing this project are not members of the Slack
+    // workspace, so they cannot run `/luma signin` — and a review surface they
+    // can only read is not a review surface.
+    //
+    // Set OPEN_REVIEW_ACCESS=false to restore the real behaviour: a session
+    // cookie from a single-use magic link, re-checked against the write-access
+    // list on every write. Nothing was removed to do this — the access list,
+    // the magic links, the sessions and `/luma access` are all still here and
+    // still work, and every test below still exercises them.
+    if (deps.openWriteAccess) return DEMO_REVIEWER;
+
     const sessionId = getCookie(c as never, "luma_session");
     if (!sessionId) return null;
 
@@ -512,7 +542,12 @@ export function createApp(deps: AppDeps) {
     if (!state) return c.text("Not found", 404);
 
     const writer = await resolveWriter(c);
-    return c.html(renderReviewPage(state, token, { canWrite: writer !== null }));
+    return c.html(
+      renderReviewPage(state, token, {
+        canWrite: writer !== null,
+        ...(deps.openWriteAccess ? { openAccess: true } : {}),
+      }),
+    );
   });
 
   /** What the page polls. Same state, as JSON. */

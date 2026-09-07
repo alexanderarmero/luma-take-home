@@ -47,6 +47,9 @@ const app = createApp({
   generator,
   store,
   publicBaseUrl: config.publicBaseUrl,
+  // TEMPORARY, FOR THE DEMO. See the note on resolveWriter in slack/app.ts and
+  // the "Access during the demo" section of APPROACH.md.
+  openWriteAccess: config.openWriteAccess,
   ...(config.anthropicApiKey
     ? {
         promptWriterFor: (brand, direction) =>

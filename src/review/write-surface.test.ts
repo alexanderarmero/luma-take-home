@@ -622,3 +622,75 @@ describe("the page itself", () => {
     expect(html).toContain("https://example.slack.com/archives/C_REVIEW/");
   });
 });
+
+describe("TEMPORARY: open write access for the demo", () => {
+  /** The same app, with the demo switch on. */
+  function openApp() {
+    return createApp({
+      signingSecret: "s",
+      now: () => NOW,
+      defer: (task) => {
+        deferred.push(task);
+      },
+      db,
+      slack,
+      store,
+      reviewChannelId: "C_REVIEW",
+      approverUserId: ELLIE,
+      publicBaseUrl: "https://shots.test",
+      openWriteAccess: true,
+    });
+  }
+
+  const openPost = (token: string, path: string, body: unknown) =>
+    openApp().request(`/api/review/${token}/${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+  it("lets somebody with only the link decide", async () => {
+    const { batch, token, imageIds } = await reviewable();
+
+    const res = await openPost(token, "decide", {
+      imageId: imageIds[0],
+      decision: "approve",
+    });
+
+    expect(res.status).toBe(200);
+    const { images } = await getProductImages(db, batch.id, "HG-002");
+    expect(images.find((i) => i.imageId === imageIds[0])!.decision).toBe("approved");
+  });
+
+  it("records that it was an anonymous reviewer, not a person", async () => {
+    // A plausible Slack id here would be a lie about who acted.
+    const { token, imageIds } = await reviewable();
+    await openPost(token, "decide", { imageId: imageIds[0], decision: "approve" });
+
+    const { rows } = await db.query<{ actor: string }>(
+      `select actor from decision_events order by id desc limit 1`,
+    );
+    expect(rows[0]!.actor).toBe("demo-reviewer");
+  });
+
+  it("says so on the page, rather than claiming they are signed in", async () => {
+    const { token } = await reviewable();
+    const html = await (await openApp().request(`/review/${token}`)).text();
+
+    expect(html).toContain("Open review");
+    expect(html).toContain("temporary");
+    expect(html).not.toContain("You're signed in");
+  });
+
+  it("is off unless switched on, so nothing else here is weakened", async () => {
+    // The gate, the access list and the sessions are all still in place —
+    // every other test in this file proves it. This one pins the default.
+    const { token, imageIds } = await reviewable();
+
+    const res = await post(token, "decide", {
+      imageId: imageIds[0],
+      decision: "approve",
+    });
+    expect(res.status).toBe(403);
+  });
+});
