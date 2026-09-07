@@ -1,4 +1,6 @@
 export interface Config {
+  /** How many Luma generations may be outstanding at once. */
+  maxConcurrentGenerations: number;
   port: number;
   databaseUrl: string;
   /** Where Slack fetches our images from. The deployed service's own URL. */
@@ -45,6 +47,12 @@ const REQUIRED = [
  * Every missing variable is reported together: discovering them one deploy at
  * a time is the difference between a single fix and four.
  */
+/** Falls back rather than throwing: a typo here must not stop the service. */
+function positiveInt(raw: string | undefined, fallback: number): number {
+  const value = Number(raw?.trim());
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
 export function loadConfig(env: Env): Config {
   const missing = REQUIRED.filter((key) => !env[key]?.trim());
 
@@ -84,6 +92,14 @@ export function loadConfig(env: Env): Config {
       accessKeyId: env.S3_ACCESS_KEY_ID!.trim(),
       secretAccessKey: env.S3_SECRET_ACCESS_KEY!.trim(),
     },
+    /**
+     * How many generations may be outstanding at once.
+     *
+     * Luma caps concurrent capacity in weight units — ten units, three per
+     * image edit — so three at a time. Configurable because that allowance is
+     * per account and not ours to hardcode.
+     */
+    maxConcurrentGenerations: positiveInt(env.LUMA_MAX_CONCURRENT, 3),
     slack: {
       signingSecret: env.SLACK_SIGNING_SECRET!.trim(),
       botToken: env.SLACK_BOT_TOKEN!.trim(),

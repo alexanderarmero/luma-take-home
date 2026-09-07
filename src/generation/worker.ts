@@ -1,6 +1,7 @@
 import type { SqlClient } from "../db/client.js";
 import {
   claimNextJob,
+  countInFlightGenerations,
   ensureReviewToken,
   getProductImages,
   getProductThread,
@@ -23,6 +24,20 @@ import {
 /** Beyond this a job is failing for a reason retrying will not fix. */
 const MAX_ATTEMPTS = 4;
 
+/**
+ * How many generations may be outstanding at once.
+ *
+ * Luma caps *concurrent* capacity separately from request rate, and says so:
+ * "Concurrent generation capacity reached (limit=10 weight units; this request
+ * needs 3)". Ten units at three units a generation is three at a time.
+ *
+ * Pacing against the request-rate headers does not help here — the window can
+ * be nearly full and the request still refused, which is exactly what the
+ * production logs showed. The only thing that frees capacity is a generation
+ * finishing, so the fix is to stop starting them, not to wait longer.
+ */
+const DEFAULT_CONCURRENT_GENERATIONS = 3;
+
 export interface WorkerDeps {
   db: SqlClient;
   generator: ImageGenerator;
@@ -37,6 +52,8 @@ export interface WorkerDeps {
   log?: (message: string) => void;
   /** Injected so the poll loop can be driven without real time in tests. */
   sleep?: (ms: number) => Promise<void>;
+  /** Overridable because the account's capacity is not ours to hardcode. */
+  maxConcurrentGenerations?: number;
 }
 
 export type StepResult =
@@ -44,6 +61,12 @@ export type StepResult =
   | { kind: "worked" }
   /** Nothing to do for this image yet — its generation is still running. */
   | { kind: "waiting"; imageId: string }
+  /**
+   * Work remains, but Luma will not accept another generation until one of
+   * ours finishes. Distinct from "waiting", which is about one image; this is
+   * about the account.
+   */
+  | { kind: "at_capacity"; inFlight: number }
   /** No job is available at all. */
   | { kind: "idle" };
 
@@ -76,8 +99,24 @@ export async function runOnce(
 ): Promise<StepResult> {
   const doFetch = deps.fetch ?? fetch;
   const log = deps.log ?? (() => {});
-  const job = await claimNextJob(deps.db, batchId, excludeImageIds);
-  if (!job) return { kind: "idle" };
+
+  // Asked before claiming, so a job we could not start is never claimed and
+  // then put back. Polling and posting stay available at capacity — they are
+  // what frees it.
+  const capacity = deps.maxConcurrentGenerations ?? DEFAULT_CONCURRENT_GENERATIONS;
+  const inFlight = await countInFlightGenerations(deps.db);
+  const allowSubmit = inFlight < capacity;
+
+  const job = await claimNextJob(deps.db, batchId, excludeImageIds, allowSubmit);
+  if (!job) {
+    // Nothing claimable. If that is only because we are at capacity, the batch
+    // is not finished — it is waiting for room.
+    if (!allowSubmit) {
+      log(`[worker] at capacity: ${inFlight}/${capacity} generations running`);
+      return { kind: "at_capacity", inFlight };
+    }
+    return { kind: "idle" };
+  }
 
   try {
     switch (job.state) {
@@ -267,7 +306,13 @@ export async function runOnce(
         incrementAttempts: true,
         lastError: (error as Error).message,
       });
-      log(`[worker] ${job.filename} attempt ${attempts} failed, will retry`);
+      // The message, not just the count. A pass-through makes no Luma call at
+      // all, so its failures appear in no request log — without this they were
+      // invisible everywhere except a database column nobody was reading.
+      log(
+        `[worker] ${job.filename} attempt ${attempts} failed, will retry: ` +
+          `${(error as Error).message}`,
+      );
       return { kind: "waiting", imageId: job.imageId };
     }
 
@@ -318,6 +363,15 @@ export async function drain(
 
     if (result.kind === "waiting") {
       waiting.add(result.imageId);
+      continue;
+    }
+
+    // Room is freed by a generation finishing, which we learn by polling, so
+    // the only thing to do is wait and look again. Not added to `waiting`:
+    // this is the account's state, not any one image's.
+    if (result.kind === "at_capacity") {
+      await sleep(pollIntervalMs);
+      waiting.clear();
       continue;
     }
 

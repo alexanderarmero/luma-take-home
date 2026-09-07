@@ -36,6 +36,59 @@ const SUBMIT = {
   userId: "image-uuid",
 };
 
+describe("telling Luma's two 429s apart", () => {
+  /** A client that always refuses with the given body. */
+  function refusing(detail: string) {
+    return createLumaGenerator({
+      authToken: "k",
+      client: {
+        generations: {
+          create: () => ({
+            withResponse: async () => {
+              throw Object.assign(new Error(detail), { status: 429, headers: {} });
+            },
+          }),
+          get: async () => ({ state: "queued" }),
+        },
+      } as never,
+    });
+  }
+
+  const submit = (g: ReturnType<typeof refusing>) =>
+    g.submit({
+      prompt: "p",
+      sourceUrl: "https://x.test/a.jpg",
+      model: "uni-1-max",
+      aspectRatio: "1:1",
+      userId: "image-1",
+    });
+
+  it("names a concurrency refusal, which waiting alone does not fix", async () => {
+    // Time fixes the request-rate window. Only a running generation finishing
+    // fixes concurrent capacity, so the logs must not conflate them.
+    const error = await submit(
+      refusing(
+        '429 {"detail":"Concurrent generation capacity reached (limit=10 weight units; this request needs 3). Wait for existing jobs to complete."}',
+      ),
+    ).catch((e: unknown) => e as Error);
+
+    expect((error as Error).message).toContain("at concurrent capacity");
+  });
+
+  it("still treats both as throttling, so neither costs an attempt", async () => {
+    const capacity = (await submit(
+      refusing('429 {"detail":"Concurrent generation capacity reached (limit=10)."}'),
+    ).catch((e: unknown) => e)) as GenerationError;
+    const window = (await submit(refusing("429 too many requests")).catch(
+      (e: unknown) => e,
+    )) as GenerationError;
+
+    expect(capacity.throttled).toBe(true);
+    expect(window.throttled).toBe(true);
+    expect(window.message).not.toContain("at concurrent capacity");
+  });
+});
+
 describe("what the logs say about a call", () => {
   // Before this, a failure reached the channel as "the generation failed" and
   // the reason existed nowhere at all.

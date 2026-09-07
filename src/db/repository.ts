@@ -457,6 +457,21 @@ export async function getProductThread(
   return { messageTs: rows[0]?.message_ts ?? null };
 }
 
+/**
+ * How many generations Luma currently considers ours to be running.
+ *
+ * Luma caps *concurrent* capacity, not just request rate: it refuses with
+ * "Concurrent generation capacity reached (limit=10 weight units; this request
+ * needs 3)". So the thing to count is submissions still outstanding, which is
+ * exactly the `submitted` state.
+ */
+export async function countInFlightGenerations(db: SqlClient): Promise<number> {
+  const { rows } = await db.query<{ n: string }>(
+    `select count(*) as n from image_jobs where state = 'submitted'`,
+  );
+  return Number(rows[0]?.n ?? 0);
+}
+
 export async function claimNextJob(
   db: SqlClient,
   batchId?: number,
@@ -466,6 +481,12 @@ export async function claimNextJob(
    * reaches the work behind it.
    */
   excludeImageIds: string[] = [],
+  /**
+   * When false, no new generation may be started — we are at Luma's
+   * concurrent capacity. Polling and posting still proceed, which is what
+   * frees the capacity up again.
+   */
+  allowSubmit = true,
 ): Promise<PipelineJob | null> {
   const params: unknown[] = [];
   let nextParam = 1;
@@ -493,6 +514,7 @@ export async function claimNextJob(
        join images i     on i.id = j.image_id
        join batch_rows r on r.batch_id = i.batch_id and r.sku = i.sku
       where j.state not in ('posted', 'failed')
+        ${allowSubmit ? "" : "and j.state <> 'pending_submit'"}
         -- A stored image waits for its siblings. Posting whichever candidate
         -- finished first scatters a product's shots through the stream, and
         -- adjacency is what makes a scrolled channel reviewable at all.

@@ -1670,3 +1670,55 @@ so "didn't arrive" describes an attempt that was never made. It sent the reader
 looking for a prompt problem that cannot exist, and it hid the actual cause,
 which is a link that did not resolve or a write that did not land. **Different
 problems, different fixes, so different words and different filters.**
+
+
+---
+
+## D56 — Gate on concurrent capacity, not on request rate
+
+**Decision.** Before claiming work, the worker counts generations still in
+`submitted` and refuses to start another once the account is full — three by
+default (`LUMA_MAX_CONCURRENT`), being ten weight units at three per image
+edit. Polling and posting stay available at capacity, because they are what
+frees it.
+
+**Why this supersedes the pacing in D53 as the primary fix.** D53 paced against
+`x-ratelimit-remaining`, which the production logs then showed was never the
+binding constraint: the refusal arrived with 21 of 30 units still available
+(F14.2). Two limits exist; I had built for the wrong one. The rate limiter
+stays — it is correct for the window, and it costs nothing when the window is
+not the problem — but the concurrency gate is what actually prevents the 429.
+
+**Why counting `submitted` rows is the right measure.** It is exactly what Luma
+is counting: work we have handed over that has not come back. No separate
+in-memory tally to drift, and it survives a restart for free, which an
+in-process counter would not.
+
+**Why "at capacity" is its own outcome.** Reporting "idle" would end the drain
+and strand every photograph not yet submitted; reporting "waiting" on a fake
+image id put a non-UUID into a `uuid[]` query parameter, which is how the first
+attempt at this failed. It is the account's state, not any one image's, so it
+gets its own kind.
+
+**Cost.** A batch is now three generations wide rather than as wide as the
+database can dispatch. It is not slower in any way that matters — the previous
+behaviour was not achieving more concurrency, it was being refused — but the
+ceiling is now explicit, and it is the honest reason a 40-product batch takes
+the time it does.
+
+---
+
+## D57 — Log the error, not just the attempt
+
+**Decision.** The worker's retry line carries the exception message.
+
+**Why it mattered.** `[worker] HG-001_original.jpg attempt 1 failed, will retry`
+was the entire record of a pass-through failing. Pass-throughs make no Luma
+call, so D54's structured request logging never saw them, and the reason
+existed only in a database column nobody was reading. Four products failed this
+way in one batch with no diagnosable cause anywhere in the logs.
+
+The general shape is worth stating: **instrumenting the interesting subsystem is
+not the same as instrumenting the failure.** The Luma path got structured
+logging because that is where the complexity is; the failures that were actually
+invisible were on the boring path that makes no API call at all.
