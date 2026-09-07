@@ -573,3 +573,79 @@ describe("posting order", () => {
     expect(JSON.stringify(slack.posts)).toContain("content filter");
   });
 });
+
+describe("Luma's concurrent capacity", () => {
+  it("stops starting generations once the account is full", async () => {
+    // Luma caps concurrent capacity, not just request rate: ten weight units
+    // at three per image edit is three at a time. Pacing against the
+    // request-rate headers does not help — the window can be nearly full and
+    // the request still refused.
+    const batch = await seed([
+      { sku: "HG-002", shotIdea: "kitchen" },
+      { sku: "HG-003", shotIdea: "shelf" },
+    ]);
+    await startGeneration(db, batch.id);
+
+    let inFlight = 0;
+    let peak = 0;
+    const counting: ImageGenerator = {
+      submit: async () => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        return { generationId: `gen-${inFlight}`, rateLimit: {} };
+      },
+      poll: async () => {
+        inFlight -= 1;
+        return { state: "completed", outputUrl: OUTPUT };
+      },
+    };
+
+    await drain(
+      { ...deps(counting), maxConcurrentGenerations: 3, sleep: async () => {} },
+      { batchId: batch.id, maxSteps: 200 },
+    );
+
+    expect(peak).toBeLessThanOrEqual(3);
+  });
+
+  it("keeps polling while at capacity, because that is what frees it", async () => {
+    const batch = await seed([{ sku: "HG-002", shotIdea: "kitchen" }]);
+    await startGeneration(db, batch.id);
+
+    let polls = 0;
+    const slow: ImageGenerator = {
+      submit: async () => ({ generationId: "gen-1", rateLimit: {} }),
+      poll: async () => {
+        polls += 1;
+        return polls < 3
+          ? { state: "pending" }
+          : { state: "completed", outputUrl: OUTPUT };
+      },
+    };
+
+    await drain(
+      { ...deps(slow), maxConcurrentGenerations: 1, sleep: async () => {} },
+      { batchId: batch.id, maxSteps: 200 },
+    );
+
+    expect(polls).toBeGreaterThanOrEqual(3);
+    const { images } = await getProductImages(db, batch.id, "HG-002");
+    expect(images.every((i) => i.jobState === "posted")).toBe(true);
+  });
+
+  it("finishes the batch rather than reporting itself idle at capacity", async () => {
+    // "Idle" would end the drain and strand everything not yet submitted.
+    const batch = await seed([{ sku: "HG-002", shotIdea: "kitchen" }]);
+    await startGeneration(db, batch.id);
+
+    await drain(
+      { ...deps(), maxConcurrentGenerations: 1, sleep: async () => {} },
+      { batchId: batch.id, maxSteps: 200 },
+    );
+
+    const { images } = await getProductImages(db, batch.id, "HG-002");
+    expect(images).toHaveLength(3);
+    expect(images.every((i) => i.jobState === "posted")).toBe(true);
+  });
+
+});

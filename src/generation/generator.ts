@@ -268,8 +268,16 @@ function toGenerationError(error: unknown): GenerationError {
   }
 
   const retryAfter = Number(headers?.["retry-after"]);
+
+  // Luma refuses for two different reasons with the same status. One is the
+  // request-rate window, which time fixes; the other is concurrent capacity —
+  // "Concurrent generation capacity reached (limit=10 weight units; this
+  // request needs 3)" — which only a running generation finishing fixes.
+  // Waiting longer does nothing for the second, so they are named apart.
+  const atCapacity = status === 429 && /concurrent generation capacity/i.test(message);
+
   return new GenerationError(
-    `HTTP ${status}: ${message}`,
+    atCapacity ? `HTTP 429: at concurrent capacity — ${message}` : `HTTP ${status}: ${message}`,
     RETRYABLE_STATUSES.has(status),
     Number.isFinite(retryAfter) ? retryAfter : undefined,
     status === 429,

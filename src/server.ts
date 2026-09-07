@@ -86,6 +86,7 @@ const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
         publicBaseUrl: config.publicBaseUrl,
         model: "uni-1-max",
         aspectRatio: "1:1",
+        maxConcurrentGenerations: config.maxConcurrentGenerations,
         log: (message) => console.log(message),
       },
       {

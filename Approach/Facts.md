@@ -604,3 +604,42 @@ caused by the first, and nothing in the system connected them.
 **What this does not explain.** Pass-throughs make no Luma call at all, so a
 failing `HG-024_original.jpg` is a download or a storage write, not throttling.
 That one is now visible in the structured log rather than inferred.
+
+
+---
+
+## F14 — The 429 was concurrency, not request rate (measured from production, 2026-09-07)
+
+The first pacing fix (D53) was aimed at the wrong limit. With structured logging
+in place, Luma said exactly what it meant:
+
+```
+[worker] rate limit remaining 27/30
+[worker] rate limit remaining 24/30
+[worker] rate limit remaining 21/30
+HTTP 429: {"detail":"Concurrent generation capacity reached
+           (limit=10 weight units; this request needs 3).
+           Wait for existing jobs to complete."}
+```
+
+**F14.1 — There are two limits, not one.** A request-rate window of 30 weight
+units, and a *concurrent capacity* of 10 weight units. An `image_edit` on
+`uni-1-max` costs **3 units**, which the header confirms: remaining falls
+27 → 24 → 21, three at a time.
+
+**F14.2 — The refusal came with 21 of 30 still available.** Two-thirds of the
+window was unused. Pacing against `x-ratelimit-remaining` could never have
+prevented this, because the window was not the binding constraint.
+
+**F14.3 — Ten units at three per generation is three at a time.** A fourth
+concurrent request needs 12 units against a limit of 10, so it is refused.
+
+**F14.4 — Waiting does not help.** Luma's own message says *"wait for existing
+jobs to complete"*. Capacity is freed by a generation finishing, not by time
+passing, so a `Retry-After` backoff is answering the wrong question. The fix is
+to stop starting generations, not to wait longer between them.
+
+**F14.5 — The pass-through failures are unrelated and were invisible.** The same
+log shows `HG-001_original.jpg attempt 1 failed`, with no reason: pass-throughs
+make no Luma call, so they appear in no request log, and the worker logged the
+attempt count without the error. The message is now logged.
