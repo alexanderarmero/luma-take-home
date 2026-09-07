@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { addBatchRows, batchCounts, claimNextJob, createBatch } from "../db/repository.js";
+import {
+  addBatchRows,
+  batchCounts,
+  claimNextJob,
+  createBatch,
+  getProductImages,
+} from "../db/repository.js";
 import { createTestDb, type TestDb } from "../db/testing.js";
 import {
   allImageFilenames,
@@ -74,6 +80,59 @@ async function seed(rows: Array<{ sku: string; shotIdea: string | null }>) {
   );
   return batch;
 }
+
+describe("being told to slow down", () => {
+  it("does not spend one of the image's attempts", async () => {
+    // The bug this fixes: a busy batch converts its own impatience into
+    // permanent failures. Four refusals in a few seconds and an image that
+    // would have generated perfectly well is marked as never having arrived.
+    const batch = await seed([{ sku: "HG-002", shotIdea: "kitchen" }]);
+    await startGeneration(db, batch.id);
+
+    let calls = 0;
+    const throttling: ImageGenerator = {
+      submit: async () => {
+        calls += 1;
+        if (calls <= 6) {
+          throw new GenerationError("HTTP 429: rate limited", true, 1, true);
+        }
+        return { generationId: "gen-1", rateLimit: {} };
+      },
+      poll: async () => ({ state: "completed", outputUrl: "https://luma/o.jpg" }),
+    };
+
+    await drain(
+      { ...deps(throttling), sleep: async () => {} },
+      { batchId: batch.id, maxSteps: 60 },
+    );
+
+    // Six refusals, far past MAX_ATTEMPTS, and it still generated.
+    const { images } = await getProductImages(db, batch.id, "HG-002");
+    expect(images.some((i) => i.jobState === "failed")).toBe(false);
+    expect(calls).toBeGreaterThan(6);
+  });
+
+  it("still gives up on a failure that is genuinely the image's", async () => {
+    // The exemption is for throttling only; a real error must still exhaust.
+    const batch = await seed([{ sku: "HG-002", shotIdea: "kitchen" }]);
+    await startGeneration(db, batch.id);
+
+    const broken: ImageGenerator = {
+      submit: async () => {
+        throw new GenerationError("HTTP 500: upstream", true);
+      },
+      poll: async () => ({ state: "completed", outputUrl: "https://luma/o.jpg" }),
+    };
+
+    await drain(
+      { ...deps(broken), sleep: async () => {} },
+      { batchId: batch.id, maxSteps: 60 },
+    );
+
+    const { images } = await getProductImages(db, batch.id, "HG-002");
+    expect(images.every((i) => i.jobState === "failed")).toBe(true);
+  });
+});
 
 describe("startGeneration", () => {
   it("makes candidates for shot ideas and one pass-through for a blank", async () => {

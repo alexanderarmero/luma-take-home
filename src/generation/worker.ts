@@ -245,6 +245,21 @@ export async function runOnce(
     }
   } catch (error) {
     const retryable = error instanceof GenerationError ? error.retryable : true;
+    const throttled = error instanceof GenerationError && error.throttled;
+
+    // Being told to slow down is not this photograph's fault, so it does not
+    // spend one of its four attempts. Without this a busy batch converts its
+    // own impatience into permanent failures: four refusals in a few seconds
+    // and an image that would have generated perfectly well is marked as
+    // never having arrived.
+    if (throttled) {
+      log(`[worker] ${job.filename} throttled, will retry without penalty`);
+      await setJobState(deps.db, job.imageId, job.state, {
+        lastError: (error as Error).message,
+      });
+      return { kind: "waiting", imageId: job.imageId };
+    }
+
     const attempts = job.attempts + 1;
 
     if (retryable && attempts < MAX_ATTEMPTS) {

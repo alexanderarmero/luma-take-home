@@ -59,6 +59,10 @@ export interface ReviewState {
     passThrough: number;
     /** Photos that failed once and were asked for again. */
     retried: number;
+    /** Generations that failed — a prompt or model problem. */
+    failedGenerated: number;
+    /** Originals that could not be copied — a link or storage problem. */
+    failedPassThrough: number;
   };
   spentUsd: number;
   /** Changes whenever anything the page shows has changed. */
@@ -102,13 +106,22 @@ export async function buildReviewState(
   let generated = 0;
   let passThrough = 0;
   let retried = 0;
+  let failedGenerated = 0;
+  let failedPassThrough = 0;
 
   const views: ProductView[] = products.map((product) => {
     const isPassThrough = product.images.some((i) => i.kind === "pass_through");
 
     const candidates: CandidateView[] = product.images.map((image) => {
       const state = candidateState(image.jobState, image.decision);
-      if (state === "failed") failed += 1;
+      if (state === "failed") {
+        failed += 1;
+        // Split, because they are different problems with different fixes:
+        // one is a prompt or a model refusing, the other is a link that did
+        // not resolve or a write that did not land.
+        if (image.kind === "pass_through") failedPassThrough += 1;
+        else failedGenerated += 1;
+      }
       else if (state === "generating") generating += 1;
       else ready += 1;
       // Billed once submitted, not once the row exists.
@@ -171,6 +184,8 @@ export async function buildReviewState(
       failed,
       passThrough,
       retried,
+      failedGenerated,
+      failedPassThrough,
     },
     // Only generated images cost anything; pass-throughs are free.
     spentUsd: Number((generated * PRICING.imageEdit[model]).toFixed(4)),
