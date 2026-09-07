@@ -48,18 +48,19 @@ describe("estimateMinutes", () => {
   });
 
   it("puts the real catalog in a believable range", () => {
-    // Sixteen waves of generation plus the local work on seventy-two images.
-    // The previous model said five minutes here, which was the defect.
+    // Sixteen waves at a measured 93 seconds, plus local work on seventy-two
+    // images. The previous model said five minutes here, which was the defect;
+    // F16.5 puts the generation half alone at about twenty-five.
     const minutes = estimateMinutes(CATALOG);
-    expect(minutes).toBeGreaterThanOrEqual(14);
-    expect(minutes).toBeLessThanOrEqual(20);
+    expect(minutes).toBeGreaterThanOrEqual(25);
+    expect(minutes).toBeLessThanOrEqual(38);
   });
 
   it("errs long rather than short", () => {
     // Being early is fine; being late sends someone looking for a bug. The
     // floor is the generation waves alone, before any local work is counted.
     const seconds = estimateMinutes(CATALOG) * 60;
-    expect(seconds).toBeGreaterThan(Math.ceil(CATALOG.styled / 3) * 45);
+    expect(seconds).toBeGreaterThan(Math.ceil(CATALOG.styled / 3) * 93);
   });
 });
 

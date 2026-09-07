@@ -14,10 +14,10 @@ kept in the order they were made, including the parts that were later reversed.
 
 | File | Contains | Feeds |
 |---|---|---|
-| **[`Facts.md`](./Facts.md)** | Only verified, checkable statements — measured from the data, read from the docs, or fixed by the brief. No opinions. | Everything |
-| **[`Assumptions.md`](./Assumptions.md)** | Every assumption as *question I'd have asked → assumption taken → what it changed*, with `HELD` / `AT RISK` / `RETIRED` status. Plus the open-questions register. | `ASSUMPTIONS.md` |
-| **[`Decisions.md`](./Decisions.md)** | 37 numbered decisions with sub-rulings, the options considered, why this one, and what it unblocked. Superseded and deferred entries are struck through, **not deleted**. | Scope ledger |
-| **[`Tradeoffs.md`](./Tradeoffs.md)** | What each decision cost, the strongest case against it, what to watch after it ships, and what would reverse it. Three *roads not taken* recorded in full. | `APPROACH.md` |
+| **[`Facts.md`](./Facts.md)** | 16 entries. Only verified, checkable statements — measured from the data, read from the docs, or fixed by the brief. No opinions. | Everything |
+| **[`Assumptions.md`](./Assumptions.md)** | Every assumption as *question I'd have asked → assumption taken → what it changed*, with `HELD` / `AT RISK` / `RETIRED` status. Plus the open-questions register. | `APPROACH.md` |
+| **[`Decisions.md`](./Decisions.md)** | 60 numbered decisions with sub-rulings, the options considered, why this one, and what it unblocked. Superseded and deferred entries are kept in full, **not deleted** — the revisions are part of the reasoning. | Scope ledger |
+| **[`Tradeoffs.md`](./Tradeoffs.md)** | 18 entries. What each decision cost, the strongest case against it, what to watch after it ships, and what would reverse it. Three *roads not taken* recorded in full. | `APPROACH.md` |
 
 **Cross-references are load-bearing.** `F3.4` is a fact, `A1.2` an assumption, `D22` a
 decision, `T9.1` a tradeoff, `OQ-17` an open question. A decision that cites `F5` was made
@@ -27,15 +27,23 @@ against measured data; one citing `A10.4` was made against an admitted guess.
 
 ## The design in one paragraph
 
-**A Slack app and nothing else.** A slash command opens a modal to upload a CSV; the system
-validates it and posts a recap *with the cost* before spending anything; one button fires a
-batch. Each shot idea becomes 2–3 distinct prompts via Claude, generated at `uni-1-max`
-against the product's own photo, downloaded immediately, stored, and posted as one flat
-message per image — each with its filename, its prompt, and Approve/Discard buttons, and its
-own thread for discussion. Rows with no shot idea pass their original photo through,
-unmodified and free. When every image is actioned the batch auto-completes and a confirm
-button appears; confirming freezes it, advances a delivered pointer, and makes the zip
-retrievable by the web person on their own, under filenames that mean something.
+**A Slack app with one web page hanging off it.** A slash command opens a modal to upload a
+CSV; the system validates it and shows a recap *with the cost* in that same modal before
+spending anything, so the estimate and the decision are one screen. Each shot idea becomes
+three distinct prompts via Claude, generated at `uni-1-max` against the product's own photo,
+downloaded immediately and stored. The channel gets one line per product and that product's
+candidates go in its thread; the line links to an overview page showing them side by side,
+which is where approving and discarding actually happen. Rows with no shot idea pass their
+original photo through, unmodified and free. When every photograph is actioned the batch
+auto-completes and a confirm panel appears; confirming freezes it, advances a delivered
+pointer, and attaches the zip and the approved-catalog CSV to the confirmation message,
+under filenames that mean something.
+
+> **This paragraph was rewritten once.** The original design put approval on Slack buttons
+> alone, with no page at all — see `D39`, and *The road not taken* in `Tradeoffs.md`. The
+> page exists because **approving shot 2 of 3 is a comparison, not a verdict**, and Slack
+> cannot show three candidates together. Push versus pull was the rule that mattered; Slack
+> versus browser was not.
 
 ---
 

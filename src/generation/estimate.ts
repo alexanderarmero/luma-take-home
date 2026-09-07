@@ -3,23 +3,24 @@ import { LUMA_CONCURRENT_GENERATIONS } from "./capacity.js";
 /**
  * How long one generation takes, end to end.
  *
- * *Not measured.* The first production log export caught eighteen submissions
- * and eighteen "still pending" polls, but the window was cut short by a deploy
- * before any of them came back, so no completion has ever been timed. Forty-
- * five seconds is the figure this file has always carried and it errs long,
- * which is the safe direction; it should be replaced with a real number the
- * first time a batch is watched from start to finish.
+ * Measured, not assumed: 93 seconds at the median across 27 submit-to-complete
+ * pairs, 114s at p95 and 135s worst (F16.3). This file carried 45 seconds
+ * before there were logs to read, which was a guess inherited from a time when
+ * nothing had ever been timed. The median is the right figure for a promise
+ * made about a whole batch — every wave rolls the same dice, so the tail
+ * averages out rather than compounding.
  */
-const SECONDS_PER_GENERATION = 45;
+const SECONDS_PER_GENERATION = 93;
 
 /**
  * How long a freed slot sits unused before the worker takes it.
  *
- * At capacity the drain loop has nothing to do but sleep and re-poll, so a
- * generation that finishes just after a sleep begins is not noticed until it
- * ends. Matches `drain`'s default poll interval.
+ * Capacity is freed by a generation finishing, and the only way we find that
+ * out is by asking. D60 leaves a generation alone for 8 seconds between polls
+ * once it is running, so that is the worst case for noticing — and the worst
+ * case is the one to quote, because this estimate errs long by design.
  */
-const SECONDS_TO_NOTICE_A_FREE_SLOT = 3;
+const SECONDS_TO_NOTICE_A_FREE_SLOT = 8;
 
 /**
  * Local work per image, generated or not: a download, a store write, and a
@@ -37,10 +38,9 @@ const SECONDS_PER_IMAGE = 3;
  *    of forty-eight. This is the part the previous version got wrong: it was
  *    written before that ceiling existed and modelled the wait as "one
  *    generation, then a couple of seconds per image", which quoted five
- *    minutes for a catalog that takes closer to seventeen — and seven for a
- *    forty-product drop that takes nearer forty. Someone watching a batch run
- *    three times longer than promised has been given a reason to go looking
- *    for a bug that isn't there.
+ *    minutes for a catalog that measurement now puts near thirty. Someone
+ *    watching a batch run six times longer than promised has been given a
+ *    reason to go looking for a bug that isn't there.
  *  - **Pass-throughs are not generations.** Copying a customer's own photo
  *    makes no Luma call and waits on no capacity, so counting it as though it
  *    did inflates every mixed batch. That is why this takes the two counts

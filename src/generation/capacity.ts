@@ -22,6 +22,6 @@
  * estimate, which must not promise a batch will finish as though it could.
  * They disagreed once already — the estimate was written before this ceiling
  * existed, kept assuming unbounded upstream concurrency, and quoted five
- * minutes for a catalog that takes closer to seventeen.
+ * minutes for a catalog that measurement now puts near thirty.
  */
 export const LUMA_CONCURRENT_GENERATIONS = 3;
