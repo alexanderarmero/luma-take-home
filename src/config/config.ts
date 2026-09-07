@@ -1,6 +1,14 @@
 export interface Config {
   /** How many Luma generations may be outstanding at once. */
   maxConcurrentGenerations: number;
+  /**
+   * TEMPORARY, FOR THE TAKE-HOME DEMO: anyone with the review link may decide.
+   *
+   * On by default, because the people assessing this project are not in the
+   * Slack workspace and so cannot sign in. `OPEN_REVIEW_ACCESS=false` restores
+   * sign-in and the access list.
+   */
+  openWriteAccess: boolean;
   port: number;
   databaseUrl: string;
   /** Where Slack fetches our images from. The deployed service's own URL. */
@@ -100,6 +108,10 @@ export function loadConfig(env: Env): Config {
      * per account and not ours to hardcode.
      */
     maxConcurrentGenerations: positiveInt(env.LUMA_MAX_CONCURRENT, 3),
+    // Opt *out* rather than opt in, so the demo works without anyone having to
+    // remember a variable. Reversing that default is the single edit that
+    // makes this a normal, gated deployment again.
+    openWriteAccess: env.OPEN_REVIEW_ACCESS?.trim().toLowerCase() !== "false",
     slack: {
       signingSecret: env.SLACK_SIGNING_SECRET!.trim(),
       botToken: env.SLACK_BOT_TOKEN!.trim(),
