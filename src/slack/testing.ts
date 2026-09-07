@@ -23,6 +23,8 @@ export interface FakeSlack extends SlackClient {
   dms: string[];
   /** Messages currently pinned, as `channel:ts`. */
   pinned: Set<string>;
+  /** Home tabs published, in order. */
+  homeViews: Array<{ userId: string; view: Record<string, unknown> }>;
   reset(): void;
 }
 
@@ -45,6 +47,7 @@ export function createFakeSlack(): FakeSlack {
     files: new Map(),
     dms: [],
     pinned: new Set<string>(),
+    homeViews: [],
 
     postMessage: async (input) => {
       const ts = `170000000${fake.posts.length + 1}.000100`;
@@ -88,6 +91,10 @@ export function createFakeSlack(): FakeSlack {
         throw new Error(`no fake file registered for ${url}`);
       }
       return { bytes: Buffer.from(content), contentType: "image/jpeg" };
+    },
+
+    publishHomeView: async (input) => {
+      fake.homeViews.push(input);
     },
 
     pinMessage: async ({ channel, ts }) => {

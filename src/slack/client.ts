@@ -88,6 +88,13 @@ export interface SlackClient {
    * when the batch is handed over — a pin nobody removes is clutter with a
    * longer half-life.
    */
+  /**
+   * Draws the app's Home tab for one person.
+   *
+   * Published on demand rather than once at install: Slack has no "publish to
+   * everyone" call, and the Home tab is per-user.
+   */
+  publishHomeView(input: { userId: string; view: Record<string, unknown> }): Promise<void>;
   pinMessage(input: { channel: string; ts: string }): Promise<void>;
   unpinMessage(input: { channel: string; ts: string }): Promise<void>;
   /**
@@ -299,6 +306,10 @@ export function createSlackClient(options: SlackClientOptions): SlackClient {
         bytes: Buffer.from(await response.arrayBuffer()),
         contentType: contentType || "image/jpeg",
       };
+    },
+
+    async publishHomeView({ userId, view }) {
+      await callJson("views.publish", { user_id: userId, view });
     },
 
     async pinMessage({ channel, ts }) {

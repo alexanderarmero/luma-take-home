@@ -1570,3 +1570,39 @@ just confirmed. The handover is already durable in the database when the
 packaging is attempted.
 
 **Cost — see T19.** There is now exactly one route to the files.
+
+---
+
+## D52 — The app's Home tab is the manual
+
+**Decision.** Opening **Luma Shots** in Slack shows a Home tab walking through
+setting up the channel, muting it, signing in, building the CSV, uploading,
+reviewing and confirming. It is published on `app_home_opened` via the Events
+API, and republished every time somebody opens it.
+
+**Why the Home tab and not a README or a welcome message.** A README is not
+where a merchandiser looks. A welcome message posted on install is seen once,
+by whoever installed it, and scrolls away. The Home tab is the one surface
+Slack gives that is *always there*, *per person*, and reachable from the
+sidebar by somebody who joined three weeks after setup.
+
+**Republished on every open**, not written once at install. It costs one API
+call, and it means a deploy that improves the guide reaches everyone who
+already installed the app — including people who will never look at a
+changelog.
+
+**What it covers that nothing else did.** Two things caused real trouble in
+testing and neither is discoverable:
+
+1. **Muting the channel.** Forty products is forty messages. Without being told
+   to mute, the app is a nuisance on day one — and the single @-mention at the
+   end is precisely what makes muting safe, so the two facts have to be given
+   together.
+2. **What the CSV columns mean.** `Photo` must be reachable without a login,
+   `Shot Idea` is a phrase rather than a prompt, a blank `Shot Idea` costs
+   nothing, and `Notes` are deliberately ignored. Someone will otherwise put a
+   real instruction in `Notes` and never learn why it had no effect.
+
+**Cost.** An Events API subscription, which is a second inbound URL to keep
+verified and signed. It handles exactly one event, and anything else is
+acknowledged and dropped.

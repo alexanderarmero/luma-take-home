@@ -23,6 +23,9 @@ export function buildHelp(isAdmin: boolean): string {
   }
   lines.push(
     "",
+    "_New here? Open the *Luma Shots* app in your sidebar — its *Home* tab is a " +
+      "walkthrough, from setting up the channel to your first upload._",
+    "",
     "_The approved photos arrive as a zip on the batch's confirmation message — " +
       "there is nothing to run to get them._",
     "",
