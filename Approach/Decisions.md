@@ -1785,12 +1785,21 @@ was that the ceiling was knowledge held in one module. A second hardcoded `3`
 in `estimate.ts` would have recreated it the moment `LUMA_MAX_CONCURRENT` moved
 the worker's ceiling and left the promise behind.
 
-**What is still assumed, not measured.** Forty-five seconds per generation is
-inherited from the old model and has never been timed — F15's log window was
-cut off by a deploy before any generation completed, so no end-to-end duration
-exists anywhere in the record. The wave *structure* is now right; the constant
-inside it is a placeholder that errs long, and one watched batch would replace
-it with a fact.
+**What was assumed, and is no longer.** This shipped with forty-five seconds
+per generation, inherited from the old model and never timed — F15's window was
+cut off by a deploy before any generation completed. F16.3 then measured it at
+**93 seconds** (p50) and D60 changed the poll cadence the estimate reads for its
+other constant, so both were wrong within the hour. They are now 93 and 8, and
+the real catalog is quoted near thirty minutes rather than seventeen.
+
+**Which is the same defect, immediately repeated.** D59 exists because a
+ceiling moved in `worker.ts` and the promise did not follow. F16 and D60 moved a
+*measurement* and a *cadence* in `worker.ts`, and the promise did not follow
+again — in a file whose entire purpose had just been rewritten to track them.
+Extracting `capacity.ts` fixed the coupling for the one number that had a home;
+the other two stayed as bare constants and drifted on the next commit. The
+lesson the first fix did not reach: **a shared constant only protects the value
+you thought to share.**
 
 **The general shape.** A limit added in one place is not finished until every
 promise made about it moves too. D56 changed what the system *does*; it did not
@@ -1801,7 +1810,7 @@ been the right answer and quietly became the wrong one.
 
 ---
 
-## D59 — Back off polling per generation
+## D60 — Back off polling per generation
 
 **Decision.** A generation is left alone for 20 seconds before the first poll,
 then asked about every 8, tracked per image rather than per cycle.
