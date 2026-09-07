@@ -1606,3 +1606,67 @@ testing and neither is discoverable:
 **Cost.** An Events API subscription, which is a second inbound URL to keep
 verified and signed. It handles exactly one event, and anything else is
 acknowledged and dropped.
+
+---
+
+## D53 — Pace against the window the API reports, and never charge an image for it
+
+**Decision.** One process-wide rate limiter feeds on `x-ratelimit-*` and
+`Retry-After`, waits before a call when the window is nearly empty, and a
+throttled request **does not consume one of the image's four attempts**.
+
+**Why a reserve rather than waiting for the 429.** The reset header has second
+granularity and the quota is per account, so aiming to land exactly on empty
+means overshooting it. Stopping with two requests in hand costs almost nothing
+and avoids paying for the lesson.
+
+**Why throttling is separate from retryable.** They answer different questions.
+*Retryable* asks whether another attempt could succeed; *throttled* asks whose
+fault it was. A 429 is ours, not the photograph's — see F13.3 for what
+conflating them produced.
+
+**Why one limiter for the process.** The quota is per account. Two independent
+pacers would each believe they had the whole window, which is the same bug
+with more moving parts.
+
+**Cost.** A large batch now takes longer in wall-clock time, because it is no
+longer allowed to sprint into a wall. That is the trade, and it is a good one:
+the previous behaviour was not faster, it just failed sooner.
+
+---
+
+## D54 — One structured line per Luma call
+
+**Decision.** Every submit and poll emits a single JSON line: operation,
+outcome, our image id, Luma's generation id, duration, HTTP status, failure
+code and reason, and the rate-limit headroom at the time. The limiter's state
+is also exposed on `/healthz`.
+
+**Why JSON rather than prose.** The question asked of these logs is always an
+aggregate — *which* failure code, *how often*, *how long before it gave up* —
+and prose has to be re-parsed by hand every time. Railway's log search matches
+the raw line either way, so `luma.call` finds all of them and
+`"outcome":"failed"` finds the ones that matter.
+
+**Why the image id travels.** It is already sent to Luma as `user_id` for
+reconciliation. Logging it means a line can be traced back to a product rather
+than only to a generation id nobody can look up afterwards.
+
+**Why `/healthz` too.** *"Why is nothing generating?"* and *"why did those all
+fail?"* are usually the same question, and the answer is usually the window.
+Putting it behind a curl means finding that out does not require catching a log
+line while it happens.
+
+---
+
+## D55 — A photograph with no shot idea never "didn't arrive"
+
+**Decision.** A failed pass-through is labelled *original photo unavailable*,
+its placeholder reads *couldn't be copied*, and it has its own filter and its
+own count, separate from failed generations.
+
+**Why.** Nothing was generated for it — its own photograph was being copied —
+so "didn't arrive" describes an attempt that was never made. It sent the reader
+looking for a prompt problem that cannot exist, and it hid the actual cause,
+which is a link that did not resolve or a write that did not land. **Different
+problems, different fixes, so different words and different filters.**

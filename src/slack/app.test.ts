@@ -70,6 +70,40 @@ beforeEach(() => {
   deferred = [];
 });
 
+describe("/healthz on the Luma window", () => {
+  it("says how much room is left, so a stall is diagnosable with curl", async () => {
+    // "Why is nothing generating?" and "why did those all fail?" are usually
+    // the same question, and the answer used to exist only in a log line
+    // nobody was watching at the time.
+    const res = await createApp({
+      signingSecret: SECRET,
+      now: () => NOW,
+      defer: () => {},
+      db,
+      lumaStatus: () => ({
+        limit: 30,
+        remaining: 0,
+        resetAtUnix: 1_700_000_060,
+        blockedUntilMs: NOW + 30_000,
+        throttleCount: 7,
+      }),
+    }).request("/healthz");
+
+    const body = (await res.json()) as { luma: Record<string, unknown> };
+    expect(body.luma).toMatchObject({
+      rateLimit: 30,
+      remaining: 0,
+      throttleCount: 7,
+      waiting: true,
+    });
+  });
+
+  it("omits the section entirely when nothing is generating here", async () => {
+    const res = await app().request("/healthz");
+    expect((await res.json()) as Record<string, unknown>).not.toHaveProperty("luma");
+  });
+});
+
 describe("reaching a verb two ways", () => {
   // `/luma status` carries the verb in the text; `/luma-status` carries it in
   // the command name, which is what lets Slack autocomplete each one.

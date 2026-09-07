@@ -18,6 +18,18 @@ const STATE_LABEL: Record<string, string> = {
 };
 
 /**
+ * What to call a photograph that never appeared.
+ *
+ * A product with no shot idea was never *generated* — its own photograph was
+ * being copied — so "didn't arrive" describes something that was never
+ * attempted, and sends the reader looking for a prompt problem that cannot
+ * exist. The copy failed; the original is fine and still on their site.
+ */
+function failedLabel(isPassThrough: boolean): string {
+  return isPassThrough ? "original photo unavailable" : "didn't arrive";
+}
+
+/**
  * The read-only overview.
  *
  * Read-only on purpose: approvals stay in Slack, where the platform tells us
@@ -154,7 +166,8 @@ export function renderReviewPage(
     <span><b>${totals.approved}</b> approved</span>
     <span><b>${totals.discarded}</b> discarded</span>
     <span><b>${totals.pending}</b> still to review</span>
-    ${totals.failed > 0 ? `<span><b>${totals.failed}</b> didn't arrive</span>` : ""}
+    ${totals.failedGenerated > 0 ? `<span><b>${totals.failedGenerated}</b> didn't arrive</span>` : ""}
+    ${totals.failedPassThrough > 0 ? `<span><b>${totals.failedPassThrough}</b> original unavailable</span>` : ""}
     <span>$${state.spentUsd.toFixed(2)} spent</span>
   </div>
   ${
@@ -171,7 +184,12 @@ export function renderReviewPage(
       { key: "discarded", label: "Discarded", count: totals.discarded },
       { key: "passthrough", label: "No shot idea", count: totals.passThrough },
       { key: "retried", label: "Retried", count: totals.retried },
-      { key: "failed", label: "Didn't arrive", count: totals.failed },
+      { key: "failed", label: "Didn't arrive", count: totals.failedGenerated },
+      {
+        key: "uncopied",
+        label: "Original unavailable",
+        count: totals.failedPassThrough,
+      },
     ]
       // Shown at zero rather than hidden, and disabled: a filter that appears
       // and disappears as decisions land is a moving target to aim at.
@@ -282,6 +300,11 @@ export function renderReviewPage(
           // it has got to. Both can be true of an approved shot.
           name === "passthrough" ? figure.dataset.passthrough === "1" :
           name === "retried" ? figure.dataset.retried === "1" :
+          // "Didn't arrive" means a generation that failed. A pass-through
+          // that could not be copied is a different problem with a different
+          // fix, so it gets its own filter rather than being lumped in.
+          name === "uncopied" ? figure.dataset.uncopied === "1" :
+          name === "failed" ? state === "failed" && figure.dataset.uncopied !== "1" :
           state === name;
 
         figure.hidden = !match;
@@ -466,14 +489,23 @@ function renderCandidate(
   candidate: ReviewState["products"][number]["candidates"][number],
   viewer: Viewer,
 ): string {
-  const label = STATE_LABEL[candidate.state] ?? candidate.state;
+  const label =
+    candidate.state === "failed"
+      ? failedLabel(candidate.isPassThrough)
+      : (STATE_LABEL[candidate.state] ?? candidate.state);
   const tagClass = ["approved", "discarded", "failed"].includes(candidate.state)
     ? candidate.state
     : "";
 
   const visual = candidate.imageUrl
     ? `<img src="${esc(candidate.imageUrl)}" alt="${esc(candidate.filename)}" loading="lazy">`
-    : `<div class="ph">${candidate.state === "failed" ? "not generated" : "generating…"}</div>`;
+    : `<div class="ph">${
+        candidate.state === "failed"
+          ? candidate.isPassThrough
+            ? "couldn't be copied"
+            : "not generated"
+          : "generating…"
+      }</div>`;
 
   const decidable = viewer.canWrite && candidate.state !== "failed" && candidate.imageUrl;
 
@@ -485,7 +517,9 @@ function renderCandidate(
 
   return `<figure data-state="${esc(candidate.state)}"${
     candidate.isPassThrough ? ' data-passthrough="1"' : ""
-  }${candidate.retried ? ' data-retried="1"' : ""}>
+  }${candidate.retried ? ' data-retried="1"' : ""}${
+    candidate.state === "failed" && candidate.isPassThrough ? ' data-uncopied="1"' : ""
+  }>
     ${visual}
     <figcaption>${esc(candidate.filename)}<br>
       <span class="tag ${tagClass}">${esc(label)}</span>

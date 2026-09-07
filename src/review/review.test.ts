@@ -283,6 +283,50 @@ describe("review page", () => {
     expect((await buildReviewState(db, token))!.totals.passThrough).toBe(2);
   });
 
+  it("never says a product with no shot idea 'didn't arrive'", async () => {
+    // Nothing was being generated for it — its own photograph was being
+    // copied. "Didn't arrive" describes an attempt that was never made, and
+    // sends the reader looking for a prompt problem that cannot exist.
+    const batch = await seed([{ sku: "HG-003", shotIdea: null }]);
+    const token = await ensureReviewToken(db, batch.id);
+    await drain(
+      {
+        db,
+        generator,
+        store,
+        slack,
+        channel: "C_REVIEW",
+        model: "uni-1-max",
+        aspectRatio: "1:1",
+        // The original photo cannot be fetched: the pass-through fails.
+        fetch: (async () => new Response(null, { status: 404 })) as unknown as typeof fetch,
+        sleep: async () => {},
+      },
+      { batchId: batch.id },
+    );
+
+    const state = (await buildReviewState(db, token))!;
+    const html = renderReviewPage(state, token);
+
+    expect(state.totals.failedPassThrough).toBe(1);
+    expect(state.totals.failedGenerated).toBe(0);
+    expect(html).toContain("original photo unavailable");
+    expect(html).toContain("couldn't be copied");
+    expect(html).not.toContain("didn't arrive</span>");
+  });
+
+  it("filters the two kinds of failure apart", async () => {
+    // One is a prompt or a model refusing; the other is a link that did not
+    // resolve. Different problems, different fixes, different filters.
+    const batch = await seed([{ sku: "HG-003", shotIdea: null }]);
+    const token = await ensureReviewToken(db, batch.id);
+    const html = renderReviewPage((await buildReviewState(db, token))!, token);
+
+    expect(html).toContain('data-filter="failed"');
+    expect(html).toContain('data-filter="uncopied"');
+    expect(html).toContain("Original unavailable");
+  });
+
   it("carries no external stylesheet, script or font", async () => {
     // It has to render on a phone with nothing but the images to fetch.
     const batch = await seed([{ sku: "HG-002", shotIdea: "kitchen" }]);

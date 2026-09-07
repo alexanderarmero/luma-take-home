@@ -1,5 +1,7 @@
 import Luma from "luma-agents";
 import type { ImageModel } from "../pricing.js";
+import { noopObserver, type Observer } from "./observe.js";
+import type { RateLimiter } from "./ratelimit.js";
 
 /**
  * Async failure codes and whether retrying can help, taken from Luma's own
@@ -52,6 +54,15 @@ export class GenerationError extends Error {
     message: string,
     readonly retryable: boolean,
     readonly retryAfterSeconds?: number,
+    /**
+     * The API refused because we were going too fast, not because anything is
+     * wrong with this image.
+     *
+     * Kept separate from `retryable` because it changes who is at fault: a
+     * throttled request must not spend one of the image's four attempts, or a
+     * busy batch converts its own impatience into permanent failures.
+     */
+    readonly throttled: boolean = false,
   ) {
     super(message);
     this.name = "GenerationError";
@@ -94,12 +105,22 @@ function readRateLimit(response: Response): RateLimit {
 export function createLumaGenerator(options: {
   authToken: string;
   client?: LumaLike;
+  /** Paces requests against the window the API reports. */
+  limiter?: RateLimiter;
+  /** One structured line per call. */
+  observe?: Observer;
+  now?: () => number;
 }): ImageGenerator {
   const client: LumaLike =
     options.client ?? (new Luma({ authToken: options.authToken }) as unknown as LumaLike);
+  const limiter = options.limiter;
+  const observe = options.observe ?? noopObserver;
+  const now = options.now ?? (() => Date.now());
 
   return {
     async submit(input) {
+      await limiter?.beforeCall();
+      const startedAt = now();
       try {
         const { data, response } = await client.generations
           .create({
@@ -113,18 +134,59 @@ export function createLumaGenerator(options: {
           })
           .withResponse();
 
-        return { generationId: data.id, rateLimit: readRateLimit(response) };
+        const rateLimit = readRateLimit(response);
+        limiter?.observe(rateLimit);
+        observe({
+          event: "luma.call",
+          op: "submit",
+          outcome: "ok",
+          imageId: input.userId,
+          generationId: data.id,
+          durationMs: now() - startedAt,
+          rateLimitRemaining: rateLimit.remaining,
+          rateLimitLimit: rateLimit.limit,
+        });
+
+        return { generationId: data.id, rateLimit };
       } catch (error) {
-        throw toGenerationError(error);
+        const failure = toGenerationError(error);
+        if (failure.throttled) limiter?.throttled(failure.retryAfterSeconds);
+        observe({
+          event: "luma.call",
+          op: "submit",
+          outcome: "error",
+          imageId: input.userId,
+          durationMs: now() - startedAt,
+          status: (error as { status?: number }).status,
+          retryable: failure.retryable,
+          throttled: failure.throttled,
+          message: failure.message,
+        });
+        throw failure;
       }
     },
 
     async poll(generationId) {
+      await limiter?.beforeCall();
+      const startedAt = now();
       let generation;
       try {
         generation = await client.generations.get(generationId);
       } catch (error) {
-        throw toGenerationError(error);
+        const failure = toGenerationError(error);
+        if (failure.throttled) limiter?.throttled(failure.retryAfterSeconds);
+        observe({
+          event: "luma.call",
+          op: "poll",
+          outcome: "error",
+          generationId,
+          durationMs: now() - startedAt,
+          status: (error as { status?: number }).status,
+          retryable: failure.retryable,
+          throttled: failure.throttled,
+          message: failure.message,
+        });
+        throw failure;
       }
 
       if (generation.state === "completed") {
@@ -132,6 +194,16 @@ export function createLumaGenerator(options: {
         if (!url) {
           // Completed with nothing to fetch: treated as the retryable
           // output_not_found case rather than silently succeeding.
+          observe({
+            event: "luma.call",
+            op: "poll",
+            outcome: "failed",
+            generationId,
+            durationMs: now() - startedAt,
+            failureCode: "output_not_found",
+            failureReason: "completed with no output url",
+            retryable: true,
+          });
           return {
             state: "failed",
             failureCode: "output_not_found",
@@ -139,19 +211,47 @@ export function createLumaGenerator(options: {
             retryable: true,
           };
         }
+        observe({
+          event: "luma.call",
+          op: "poll",
+          outcome: "ok",
+          generationId,
+          durationMs: now() - startedAt,
+        });
         return { state: "completed", outputUrl: url };
       }
 
       if (generation.state === "failed") {
         const code = generation.failure_code ?? null;
+        const retryable = code !== null && RETRYABLE_FAILURE_CODES.has(code);
+        // The one place that knows *why* a photograph never arrived. Logged
+        // in full, because "the generation failed" in a Slack thread is not
+        // something anyone can act on.
+        observe({
+          event: "luma.call",
+          op: "poll",
+          outcome: "failed",
+          generationId,
+          durationMs: now() - startedAt,
+          failureCode: code,
+          failureReason: generation.failure_reason ?? null,
+          retryable,
+        });
         return {
           state: "failed",
           failureCode: code,
           failureReason: generation.failure_reason ?? null,
-          retryable: code !== null && RETRYABLE_FAILURE_CODES.has(code),
+          retryable,
         };
       }
 
+      observe({
+        event: "luma.call",
+        op: "poll",
+        outcome: "pending",
+        generationId,
+        durationMs: now() - startedAt,
+      });
       return { state: "pending" };
     },
   };
@@ -172,5 +272,6 @@ function toGenerationError(error: unknown): GenerationError {
     `HTTP ${status}: ${message}`,
     RETRYABLE_STATUSES.has(status),
     Number.isFinite(retryAfter) ? retryAfter : undefined,
+    status === 429,
   );
 }

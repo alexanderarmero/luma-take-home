@@ -5,6 +5,8 @@ import { createPostgresClient } from "./db/postgres.js";
 import { describeDatabaseUrl } from "./db/redact.js";
 import { createApp } from "./slack/app.js";
 import { createLumaGenerator } from "./generation/generator.js";
+import { consoleObserver } from "./generation/observe.js";
+import { createRateLimiter } from "./generation/ratelimit.js";
 import { createPromptWriter } from "./generation/prompts.js";
 import { startWorkerLoop } from "./generation/loop.js";
 import { createSlackClient } from "./slack/client.js";
@@ -15,7 +17,15 @@ const db = createPostgresClient(config.databaseUrl);
 const dbBootstrap = createDbBootstrap(db);
 
 const slack = createSlackClient({ botToken: config.slack.botToken });
-const generator = createLumaGenerator({ authToken: config.lumaApiKey });
+// One limiter for the whole process, because the quota is per account rather
+// than per request — two independent pacers would each think they had the
+// whole window.
+const lumaLimiter = createRateLimiter({ log: consoleObserver });
+const generator = createLumaGenerator({
+  authToken: config.lumaApiKey,
+  limiter: lumaLimiter,
+  observe: consoleObserver,
+});
 const store = createS3ObjectStore(config.storage);
 
 const app = createApp({
@@ -30,6 +40,7 @@ const app = createApp({
   },
   db,
   dbStatus: dbBootstrap.status,
+  lumaStatus: () => lumaLimiter.snapshot(),
   slack,
   reviewChannelId: config.slack.reviewChannelId,
   approverUserId: config.slack.approverUserId,

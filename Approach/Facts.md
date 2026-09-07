@@ -569,3 +569,38 @@ multi-file message, which would keep bytes in Slack. Rejected without probing be
 images would render as attachments rather than interleaved blocks — the buttons could not sit
 under the image they belong to, and mapping them by label ("Approve 1", "Approve 2") gives
 back the ambiguity that batching exists to remove.
+
+---
+
+## F13 — Why generations were failing so often (measured, 2026-09-07)
+
+Reading the code against the production logs, three compounding causes. None of
+them is the model refusing anything.
+
+**F13.1 — Nothing paced the requests.** `drain()` claims one job at a time and
+loops with no delay. For a 40-product catalog that is 48 submissions back to
+back, as fast as Postgres can hand out work, against a window the logs report
+as **30**. It then polls *every* outstanding generation every 3 seconds — with
+48 in flight, roughly 16 requests per second, indefinitely.
+
+**F13.2 — Every signal the API sent was parsed and discarded.** `readRateLimit`
+reads `x-ratelimit-limit`, `x-ratelimit-remaining` and `x-ratelimit-reset`, and
+`toGenerationError` reads `Retry-After` into `retryAfterSeconds`. Both were
+logged or stored and **never read by anything**. `grep -rn retryAfterSeconds`
+returned exactly one hit: its own declaration.
+
+**F13.3 — Throttling was converted into permanent failure.** This is the one
+that produced the symptom. A 429 is retryable, so the worker retried it — and
+counted it as one of the image's four attempts. Four refusals arrive in a few
+seconds when the window is empty, so an image that would have generated
+perfectly well exhausted `MAX_ATTEMPTS` and was written to the database as
+`failed`. The channel then reported it as *"couldn't be generated"*, which is
+what made this look like a model problem.
+
+`[worker] rate limit remaining 0/30` appearing next to `attempt 2 failed, will
+retry` in the same log window is the two halves of this: the second line is
+caused by the first, and nothing in the system connected them.
+
+**What this does not explain.** Pass-throughs make no Luma call at all, so a
+failing `HG-024_original.jpg` is a download or a storage write, not throttling.
+That one is now visible in the structured log rather than inferred.

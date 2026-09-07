@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import type { DbStatus } from "../db/bootstrap.js";
+import type { RateLimitState } from "../generation/ratelimit.js";
 import {
   buildCheckingModal,
   buildIngestErrorModal,
@@ -82,6 +83,14 @@ export interface AppDeps {
   db: SqlClient;
   /** Reported by /healthz so a database problem is diagnosable with curl. */
   dbStatus?: () => DbStatus;
+  /**
+   * Reported by /healthz too.
+   *
+   * "Why is nothing generating?" and "why did those all fail?" are usually the
+   * same question, and the answer is usually the rate-limit window — which was
+   * previously visible only in a log line nobody was watching at the time.
+   */
+  lumaStatus?: () => RateLimitState;
   slack?: SlackClient;
   reviewChannelId?: string;
   approverUserId?: string;
@@ -122,11 +131,23 @@ export function createApp(deps: AppDeps) {
 
   app.get("/healthz", (c) => {
     const db = deps.dbStatus?.() ?? { state: "ready" as const, attempts: 0 };
+    const luma = deps.lumaStatus?.();
     return c.json({
       status: db.state === "ready" ? "ok" : "degraded",
       db: db.state,
       dbAttempts: db.attempts,
       ...(db.detail ? { dbDetail: db.detail } : {}),
+      ...(luma
+        ? {
+            luma: {
+              rateLimit: luma.limit ?? null,
+              remaining: luma.remaining ?? null,
+              resetAtUnix: luma.resetAtUnix ?? null,
+              throttleCount: luma.throttleCount,
+              waiting: (luma.blockedUntilMs ?? 0) > deps.now(),
+            },
+          }
+        : {}),
     });
   });
 

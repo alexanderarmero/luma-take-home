@@ -36,6 +36,84 @@ const SUBMIT = {
   userId: "image-uuid",
 };
 
+describe("what the logs say about a call", () => {
+  // Before this, a failure reached the channel as "the generation failed" and
+  // the reason existed nowhere at all.
+  function recording() {
+    const events: Array<Record<string, unknown>> = [];
+    return { events, observe: (e: Record<string, unknown>) => events.push(e) };
+  }
+
+  it("records why a generation was refused, with its code", async () => {
+    const { events, observe } = recording();
+    const generator = createLumaGenerator({
+      authToken: "k",
+      observe,
+      client: {
+        generations: {
+          create: () => ({
+            withResponse: async () => ({
+              data: { id: "gen-1" },
+              response: new Response(null, { headers: {} }),
+            }),
+          }),
+          get: async () => ({
+            state: "failed",
+            failure_code: "content_moderated",
+            failure_reason: "prompt rejected",
+          }),
+        },
+      } as never,
+    });
+
+    await generator.poll("gen-1");
+
+    const failure = events.find((e) => e.outcome === "failed")!;
+    expect(failure.failureCode).toBe("content_moderated");
+    expect(failure.failureReason).toBe("prompt rejected");
+    expect(failure.generationId).toBe("gen-1");
+    expect(typeof failure.durationMs).toBe("number");
+  });
+
+  it("records the rate-limit headroom on every submission", async () => {
+    // "Why did those all fail?" and "how much room was left?" are usually the
+    // same question.
+    const { events, observe } = recording();
+    const generator = createLumaGenerator({
+      authToken: "k",
+      observe,
+      client: {
+        generations: {
+          create: () => ({
+            withResponse: async () => ({
+              data: { id: "gen-1" },
+              response: new Response(null, {
+                headers: { "x-ratelimit-limit": "30", "x-ratelimit-remaining": "4" },
+              }),
+            }),
+          }),
+          get: async () => ({ state: "queued" }),
+        },
+      } as never,
+    });
+
+    await generator.submit({
+      prompt: "p",
+      sourceUrl: "https://x.test/a.jpg",
+      model: "uni-1-max",
+      aspectRatio: "1:1",
+      userId: "image-7",
+    });
+
+    const call = events[0]!;
+    expect(call.op).toBe("submit");
+    expect(call.rateLimitRemaining).toBe(4);
+    expect(call.rateLimitLimit).toBe(30);
+    // Traceable back to a product rather than only to a Luma id.
+    expect(call.imageId).toBe("image-7");
+  });
+});
+
 describe("submit", () => {
   it("edits the product's own photo rather than generating from scratch", async () => {
     const { create, client } = submitClient("gen-1");
