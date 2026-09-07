@@ -815,3 +815,30 @@ describe("how often a generation is asked about", () => {
     expect(images.every((i) => i.jobState === "posted")).toBe(true);
   });
 });
+
+describe("a photograph that arrived but could not be posted", () => {
+  it("is not recorded as one that never arrived", async () => {
+    // The bug this fixes: a pass-through's own photo downloads and stores
+    // perfectly well, then Slack refuses the file share. The catch marked the
+    // *image* failed, so the overview showed the photograph — it is right
+    // there, it was stored — under a label saying it was unavailable, with a
+    // Try again button and no way to approve it. Nothing was wrong with the
+    // photo; the post was what failed.
+    const batch = await seed([{ sku: "HG-003", shotIdea: null }]);
+    await startGeneration(db, batch.id);
+
+    slack.uploadFile = async () => {
+      throw new Error("slack refused the upload");
+    };
+
+    await drain({ ...deps(), sleep: async () => {} }, { batchId: batch.id, maxSteps: 60 });
+
+    const { images } = await getProductImages(db, batch.id, "HG-003");
+    const image = images[0]!;
+
+    // Stored: the bytes are ours, and the page can show them.
+    expect(image.objectKey).not.toBeNull();
+    // Settled, and honest about which half failed.
+    expect(image.jobState).toBe("unposted");
+  });
+});

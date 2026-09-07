@@ -18,18 +18,6 @@ const STATE_LABEL: Record<string, string> = {
 };
 
 /**
- * What to call a photograph that never appeared.
- *
- * A product with no shot idea was never *generated* — its own photograph was
- * being copied — so "didn't arrive" describes something that was never
- * attempted, and sends the reader looking for a prompt problem that cannot
- * exist. The copy failed; the original is fine and still on their site.
- */
-function failedLabel(isPassThrough: boolean): string {
-  return isPassThrough ? "original photo unavailable" : "didn't arrive";
-}
-
-/**
  * The read-only overview.
  *
  * Read-only on purpose: approvals stay in Slack, where the platform tells us
@@ -489,9 +477,13 @@ function renderCandidate(
   candidate: ReviewState["products"][number]["candidates"][number],
   viewer: Viewer,
 ): string {
+  // A pass-through that could not be copied carries no tag. There is one
+  // thing that can go wrong with it, the placeholder standing in for the
+  // photograph already says exactly that, and a second line repeating it in
+  // red was what appeared under photographs that were plainly there.
   const label =
-    candidate.state === "failed"
-      ? failedLabel(candidate.isPassThrough)
+    candidate.state === "failed" && candidate.isPassThrough
+      ? null
       : (STATE_LABEL[candidate.state] ?? candidate.state);
   const tagClass = ["approved", "discarded", "failed"].includes(candidate.state)
     ? candidate.state
@@ -507,7 +499,16 @@ function renderCandidate(
           : "generating…"
       }</div>`;
 
-  const decidable = viewer.canWrite && candidate.state !== "failed" && candidate.imageUrl;
+  // A photograph you can see is a photograph you can decide on. Stated as what
+  // must be true rather than as what must not: a shot being fetched again
+  // still has last time's bytes in the store, and "not failed, has an image"
+  // put Approve on something that was mid-generation.
+  const decidable =
+    viewer.canWrite &&
+    candidate.imageUrl !== null &&
+    (candidate.state === "ready" ||
+      candidate.state === "approved" ||
+      candidate.state === "discarded");
 
   // A photo that never arrived can be discarded or tried again — not
   // approved, since there is nothing to approve. Leaving it with no controls
@@ -521,8 +522,9 @@ function renderCandidate(
     candidate.state === "failed" && candidate.isPassThrough ? ' data-uncopied="1"' : ""
   }>
     ${visual}
-    <figcaption>${esc(candidate.filename)}<br>
-      <span class="tag ${tagClass}">${esc(label)}</span>
+    <figcaption>${esc(candidate.filename)}${
+      label === null ? "" : `<br>\n      <span class="tag ${tagClass}">${esc(label)}</span>`
+    }
     </figcaption>
     ${
       decidable

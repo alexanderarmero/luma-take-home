@@ -1473,3 +1473,41 @@ re-export, the zip's lifetime is Slack's file lifetime. On a plan that expires
 files, the archive expires with them. The obvious answer if that ever matters
 is a download link on the overview page, which is a better second route than
 the command was.
+
+---
+
+## T20 — Cost of D61 (a state for "arrived but never posted")
+
+**T20.1 — An eighth job state, and every reader has to know it.** Adding
+`unposted` meant touching the claim query twice (terminal states, and the
+sibling gate that decides when a product's set is settled), the announcement
+gate, the outcome counts, the review page's state mapping and `/luma status`'s
+own `isDecidable`. Two read models were already free to disagree about what
+counts as decidable, and now there are two places to keep in step rather than
+one. The alternative — reusing `posted` and accepting a lie in the database —
+was cheaper today and would have made the batch summons wrong forever.
+
+**T20.2 — A photograph can now be approved without ever appearing in Slack.**
+The decision is recorded and `decide` skips the redraw it cannot do, so the
+audit trail is intact — but the thread will not show that shot or the decision
+on it. That is strictly better than the alternative it replaces, which was
+being unable to decide at all; it does mean the channel is no longer a complete
+record of a batch when posting has failed. The announcement calls the number
+out for exactly that reason. **What would reverse it:** a repost path that
+retries the file share on demand, at which point `unposted` becomes a state you
+can act on rather than only be told about.
+
+**T20.3 — The backfill trusts `object_key` alone.** Migration `0009` moves any
+`failed` row with a stored object to `unposted`. A photograph that stored,
+failed to post, was retried, and then failed its *re-fetch* would carry the
+earlier round's bytes and be moved too — it would read as ready, showing the
+older photograph. The page was already showing those bytes before this change,
+so the display is not new; the buttons are. Judged worth it because the
+alternative leaves every genuinely-affected batch stuck behind a Try again that
+cannot help.
+
+**T20.4 — The label went, and one signal went with it.** A pass-through that
+could not be copied no longer carries a tag; the placeholder in place of the
+photograph is the only place it is said. On a card that is scrolled past
+quickly, the red tag was the louder of the two. The count and the filter both
+survive, so the batch view still says how many there are.

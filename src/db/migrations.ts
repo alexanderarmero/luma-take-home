@@ -218,4 +218,34 @@ export const MIGRATIONS: ReadonlyArray<{ name: string; sql: string }> = [
       alter table batches add column intro_message_ts text;
     `,
   },
+  {
+    name: "0009_unposted",
+    sql: `
+      -- A photograph can arrive and still never reach the channel: the bytes
+      -- download and store, and then the file share is refused. That was
+      -- recorded as 'failed', which is the state meaning "no photograph
+      -- exists" — so the overview showed the photo it had, under a label
+      -- saying it was unavailable, offering to fetch it again and refusing to
+      -- let anyone approve it.
+      --
+      -- 'unposted' separates the two halves: the image is in hand and can be
+      -- decided on, and posting is what came up short. It is terminal for the
+      -- worker, which is the other job 'failed' was quietly doing.
+      alter table image_jobs drop constraint image_jobs_state_valid;
+      alter table image_jobs add constraint image_jobs_state_valid check (state in (
+        'pending_submit', 'pending_fetch', 'submitted', 'completed',
+        'stored', 'posted', 'unposted', 'failed'
+      ));
+
+      -- The rows already caught by it. A failed job with an object key has
+      -- its photograph in the store — the overview is showing it right now,
+      -- above the label calling it unavailable. Without this the batches that
+      -- found the bug stay unreviewable, because the only fix on offer is a
+      -- Try again that re-fetches a photograph nothing was wrong with.
+      update image_jobs
+         set state = 'unposted', updated_at = now()
+       where state = 'failed'
+         and image_id in (select id from images where object_key is not null);
+    `,
+  },
 ];

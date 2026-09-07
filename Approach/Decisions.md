@@ -1838,3 +1838,54 @@ simulated. The same restructuring exposed a second bug: entries left in the
 schedule after their generation moved on meant an empty batch never looked
 finished, so entries are now dropped once due and re-added only by a
 generation that is genuinely still running.
+
+---
+
+## D61 — "Failed" means no photograph exists, and nothing else
+
+**Decision.** A job that gives up while *posting* is recorded as `unposted`,
+not `failed`. The photograph is stored, the page shows it, it can be approved
+or discarded like any other; what came up short was the file share into its
+thread. `failed` is now reserved for the case where there is nothing to look
+at.
+
+**What went wrong.** The worker has one `catch` across every pipeline stage,
+and on giving up it wrote `failed`. For a job claimed in the `stored` stage the
+bytes had already been downloaded and written — so the overview rendered the
+photograph (from `object_key`) directly above a label saying it was unavailable
+(from the job state), offered *Try again* on a photograph nothing was wrong
+with, and refused to let anyone approve it. A pass-through with no shot idea
+showed it most plainly: its "generation" is a file copy that had plainly
+succeeded.
+
+**Why a new state rather than a smarter label.** `failed` was doing two jobs at
+once: "no photograph exists" *and* "stop claiming this". `claimNextJob`
+excluded only `('posted', 'failed')`, so `failed` was the only terminal state
+available and anything left in `stored` would be re-claimed forever. Labelling
+around it would have left the second job unfilled. `unposted` is terminal for
+the worker and ready for the reviewer, which is what the situation actually is.
+
+**Why not just call it posted.** It would have behaved correctly nearly
+everywhere and been a lie in the one place that counts: the batch summons says
+*N photos are above*, and this one is not above. It is announced separately —
+"arrived but couldn't be posted here — they're on the review page" — because
+otherwise someone scrolls the thread for a photograph that only exists on the
+page, and it sits undecided.
+
+**Supersedes part of D55.** D55's placeholder (*couldn't be copied*), its own
+filter and its own count all stand — a pass-through that genuinely cannot be
+fetched is still a different problem from a failed generation. What goes is the
+*original photo unavailable* tag: the placeholder already says it once, and the
+tag was the half that ended up under photographs that were plainly there. A
+failed pass-through now carries no tag at all.
+
+**Backfilled.** Migration `0009` moves existing `failed` rows that have an
+`object_key` to `unposted`. Without it the batches that found this stay
+unreviewable — the only control on offer was a Try again that re-fetches a
+photograph that was never the problem.
+
+**Also fixed alongside it.** The page decided which cards get buttons with
+"not failed, and has an image". A photograph being fetched again still has last
+time's bytes in the store, so that put Approve on a shot mid-regeneration. It
+now states what must be true — an image, and a state of ready, approved or
+discarded.
