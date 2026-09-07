@@ -310,8 +310,11 @@ describe("review page", () => {
 
     expect(state.totals.failedPassThrough).toBe(1);
     expect(state.totals.failedGenerated).toBe(0);
-    expect(html).toContain("original photo unavailable");
+    // The placeholder standing in for the photograph says it, once. A tag
+    // repeating it underneath was the label that ended up under photographs
+    // that were plainly there.
     expect(html).toContain("couldn't be copied");
+    expect(html).not.toContain("original photo unavailable");
     expect(html).not.toContain("didn't arrive</span>");
   });
 

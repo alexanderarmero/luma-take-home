@@ -509,6 +509,65 @@ describe("a photo that never arrived", () => {
     const failedBlock = html.slice(html.indexOf("failed-acts"));
     expect(failedBlock.slice(0, 200)).not.toContain("Approve");
   });
+
+  it("offers approve and discard on a photo that arrived but was never posted", async () => {
+    // The card this fixes: a product with no shot idea, its own photograph
+    // downloaded and stored, Slack refusing the file share. The photo was on
+    // the page — and underneath it, a label calling it unavailable and a Try
+    // again button, because the posting failure had been recorded against the
+    // image. It could be fetched again forever and never approved.
+    const batch = await createBatch(db, { sourceFilename: "catalog.csv" });
+    await addBatchRows(db, batch.id, [
+      {
+        sku: "HG-003",
+        productName: "Cereal Bowl",
+        category: "Ceramics",
+        colour: "Blue",
+        material: "Stoneware",
+        price: "$18",
+        photoUrl: "https://example.com/hg-003.jpg",
+        shotIdea: null,
+      },
+    ]);
+    await startGeneration(db, batch.id);
+
+    slack.uploadFile = async () => {
+      throw new Error("slack refused the upload");
+    };
+    await drain(
+      {
+        db,
+        generator: {
+          submit: async () => ({ generationId: "gen-1", rateLimit: {} }),
+          poll: async () => ({ state: "completed" as const, outputUrl: "https://luma/o.jpg" }),
+        },
+        store,
+        slack,
+        channel: "C_REVIEW",
+        model: "uni-1-max" as const,
+        aspectRatio: "1:1",
+        fetch: fetchOk,
+        sleep: async () => {},
+      },
+      { batchId: batch.id },
+    );
+
+    const token = await ensureReviewToken(db, batch.id);
+    const state = (await buildReviewState(db, token))!;
+    const html = renderReviewPage(state, token, { canWrite: true });
+
+    // Waiting on a decision like any other photograph, and counted as one.
+    expect(state.products[0]!.candidates[0]!.state).toBe("ready");
+    expect(state.totals.failedPassThrough).toBe(0);
+
+    expect(html).toContain('<button class="approve">Approve</button>');
+    expect(html).toContain("Discard");
+    // No retry control on it at all — there is nothing about the photograph
+    // to try again.
+    expect(html).not.toContain('class="retry"');
+    expect(html).not.toContain("failed-acts");
+    expect(html).not.toContain("original photo unavailable");
+  });
 });
 
 describe("the page itself", () => {

@@ -315,6 +315,14 @@ export type JobState =
   | "completed"
   | "stored"
   | "posted"
+  /**
+   * Arrived, but never reached the channel.
+   *
+   * The bytes are stored and the photograph can be decided on; the file share
+   * into its thread is what failed. Terminal, so the worker stops claiming it
+   * — but not 'failed', which means there is nothing to look at.
+   */
+  | "unposted"
   | "failed";
 
 export interface PipelineJob {
@@ -513,7 +521,7 @@ export async function claimNextJob(
        from image_jobs j
        join images i     on i.id = j.image_id
        join batch_rows r on r.batch_id = i.batch_id and r.sku = i.sku
-      where j.state not in ('posted', 'failed')
+      where j.state not in ('posted', 'unposted', 'failed')
         ${allowSubmit ? "" : "and j.state <> 'pending_submit'"}
         -- A stored image waits for its siblings. Posting whichever candidate
         -- finished first scatters a product's shots through the stream, and
@@ -529,7 +537,7 @@ export async function claimNextJob(
               join images si on si.id = sj.image_id
              where sj.batch_id = j.batch_id
                and si.sku = i.sku
-               and sj.state not in ('stored', 'posted', 'failed')
+               and sj.state not in ('stored', 'posted', 'unposted', 'failed')
           )
         )
         ${batchId === undefined ? "" : `and j.batch_id = $${nextParam++}`}
@@ -661,7 +669,7 @@ export async function findBatchesAwaitingAnnouncement(
         and not exists (
           select 1 from image_jobs j
            where j.batch_id = b.id
-             and j.state not in ('posted', 'failed')
+             and j.state not in ('posted', 'unposted', 'failed')
         )
         and exists (select 1 from image_jobs j where j.batch_id = b.id)`,
   );
@@ -672,16 +680,25 @@ export async function findBatchesAwaitingAnnouncement(
 export async function batchOutcome(
   db: SqlClient,
   batchId: number,
-): Promise<{ posted: number; failed: number }> {
-  const { rows } = await db.query<{ posted: string; failed: string }>(
+): Promise<{ posted: number; unposted: number; failed: number }> {
+  const { rows } = await db.query<{
+    posted: string;
+    unposted: string;
+    failed: string;
+  }>(
     `select
        count(*) filter (where state = 'posted') as posted,
+       count(*) filter (where state = 'unposted') as unposted,
        count(*) filter (where state = 'failed') as failed
      from image_jobs where batch_id = $1`,
     [batchId],
   );
   return {
     posted: Number(rows[0]?.posted ?? 0),
+    // Counted apart from both: "above in this channel" is what `posted`
+    // claims, and one of these is not. Folding it into either number would
+    // send someone scrolling for a photograph that is only on the page.
+    unposted: Number(rows[0]?.unposted ?? 0),
     failed: Number(rows[0]?.failed ?? 0),
   };
 }

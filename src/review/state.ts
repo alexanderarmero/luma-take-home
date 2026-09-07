@@ -77,7 +77,12 @@ function candidateState(
   if (decision === "approved") return "approved";
   if (decision === "discarded") return "discarded";
   if (jobState === "failed") return "failed";
-  if (jobState === "posted" || jobState === "stored") return "ready";
+  // 'unposted' too: the photograph is stored and on the page, and the page is
+  // a decision surface in its own right. Its thread post is what never
+  // happened, which is a reason to tell someone, not to withhold the buttons.
+  if (jobState === "posted" || jobState === "stored" || jobState === "unposted") {
+    return "ready";
+  }
   return "generating";
 }
 

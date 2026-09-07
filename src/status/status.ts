@@ -12,9 +12,15 @@ import type { SlackClient } from "../slack/client.js";
 /** Beyond this the listing stops being readable and starts being a wall. */
 const MAX_LISTED = 12;
 
-/** Only a photo that has been posted carries buttons to decide with. */
+/**
+ * Whether the photograph exists to be decided on.
+ *
+ * 'unposted' counts: it arrived and is on the overview page, it just never
+ * reached the channel. Excluding it would have hidden a photograph that is
+ * genuinely waiting on a decision from the one place that lists them.
+ */
 function isDecidable(jobState: string): boolean {
-  return jobState === "posted" || jobState === "stored";
+  return jobState === "posted" || jobState === "stored" || jobState === "unposted";
 }
 
 export interface StatusInput {

@@ -330,11 +330,23 @@ export async function runOnce(
       return { kind: "waiting", imageId: job.imageId };
     }
 
-    await setJobState(deps.db, job.imageId, "failed", {
+    // Which half gave up matters. A job claimed in the 'stored' stage has its
+    // photograph already downloaded and written to the store — the posting is
+    // all that failed. Calling that 'failed' put the overview in the position
+    // of showing a photograph it was simultaneously calling unavailable,
+    // offering to fetch it again and refusing to let anyone approve it.
+    const gaveUpPosting = job.state === "stored";
+
+    await setJobState(deps.db, job.imageId, gaveUpPosting ? "unposted" : "failed", {
       lastError: (error as Error).message,
       incrementAttempts: true,
     });
-    log(`[worker] ${job.filename} gave up: ${(error as Error).message}`);
+    log(
+      gaveUpPosting
+        ? `[worker] ${job.filename} arrived but could not be posted: ` +
+            `${(error as Error).message}`
+        : `[worker] ${job.filename} gave up: ${(error as Error).message}`,
+    );
     return { kind: "worked" };
   }
 }

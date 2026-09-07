@@ -46,6 +46,17 @@ export async function tick(deps: WorkerDeps, options: LoopOptions = {}): Promise
         : []),
     ];
 
+    // A photograph that arrived but never reached the channel is only on the
+    // page. Silence here would send someone scrolling the thread for it, and
+    // it would sit undecided because nobody knew it was waiting.
+    if (outcome.unposted > 0) {
+      lines.push(
+        "",
+        `*${outcome.unposted}* arrived but couldn't be posted here — they're ` +
+          "on the review page, waiting on you like the rest.",
+      );
+    }
+
     // Reported, not omitted. A photo that never arrives is otherwise
     // indistinguishable from one still on its way, and the team would wait
     // for something that is never coming.
