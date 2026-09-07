@@ -119,7 +119,7 @@ export async function startBatchAndAnnounce(input: AnnounceInput): Promise<void>
         `Generating *${counts.styled}* styled photos and copying ` +
         `*${counts.passThrough}* originals across — *${total}* to review in ` +
         `all, about ${formatUsd(cost)} of ${model}. This usually takes ` +
-        `${describeWait(total)}.`,
+        `${describeWait(counts)}.`,
     });
   } catch (error) {
     // Without this the failure reaches stderr and nobody is told, which looks

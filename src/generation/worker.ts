@@ -14,6 +14,7 @@ import {
 import type { ImageModel } from "../pricing.js";
 import type { SlackClient } from "../slack/client.js";
 import type { ObjectStore } from "../storage/store.js";
+import { LUMA_CONCURRENT_GENERATIONS } from "./capacity.js";
 import { GenerationError, type ImageGenerator } from "./generator.js";
 import { noopObserver, type Observer } from "./observe.js";
 import {
@@ -24,20 +25,6 @@ import {
 
 /** Beyond this a job is failing for a reason retrying will not fix. */
 const MAX_ATTEMPTS = 4;
-
-/**
- * How many generations may be outstanding at once.
- *
- * Luma caps *concurrent* capacity separately from request rate, and says so:
- * "Concurrent generation capacity reached (limit=10 weight units; this request
- * needs 3)". Ten units at three units a generation is three at a time.
- *
- * Pacing against the request-rate headers does not help here — the window can
- * be nearly full and the request still refused, which is exactly what the
- * production logs showed. The only thing that frees capacity is a generation
- * finishing, so the fix is to stop starting them, not to wait longer.
- */
-const DEFAULT_CONCURRENT_GENERATIONS = 3;
 
 export interface WorkerDeps {
   db: SqlClient;
@@ -113,7 +100,7 @@ export async function runOnce(
   // Asked before claiming, so a job we could not start is never claimed and
   // then put back. Polling and posting stay available at capacity — they are
   // what frees it.
-  const capacity = deps.maxConcurrentGenerations ?? DEFAULT_CONCURRENT_GENERATIONS;
+  const capacity = deps.maxConcurrentGenerations ?? LUMA_CONCURRENT_GENERATIONS;
   const inFlight = await countInFlightGenerations(deps.db);
   const allowSubmit = inFlight < capacity;
 

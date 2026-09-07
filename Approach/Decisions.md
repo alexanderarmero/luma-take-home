@@ -1748,3 +1748,52 @@ instrumenting. **Instrumenting the interesting subsystem is not the same as
 instrumenting the failure**, and the interesting subsystem is not where the
 unexplained failures live. It is where the *understood* ones live, because that
 is where the attention went.
+
+
+---
+
+## D59 — The estimate has to know about the ceiling the worker enforces
+
+**Decision.** `estimateMinutes` models generations as *waves* of three rather
+than as one concurrent burst, takes the styled and pass-through counts
+separately instead of one total, and reads the concurrency ceiling from a
+shared constant (`src/generation/capacity.ts`) that the worker now reads too.
+
+**The defect.** `estimate.ts` was committed before D56 and its model was, in
+its own words, "wait out one generation, then spend a couple of seconds per
+image" — `45 + n * 3` seconds. That was true when Luma would accept as many
+generations as the database could dispatch. D56 capped it at three, and nothing
+updated the promise. The real catalog was quoted **about five minutes** for
+work that now takes nearer **seventeen**; a forty-product drop was quoted seven
+against nearer forty.
+
+**Why that is worse than an inaccurate number.** This estimate is the one
+sentence the channel gets before a long silence, and the file's own comment
+says why it errs long: *"someone told 'about one' who waits four goes looking
+for a bug."* Being wrong by 3× in the short direction manufactures exactly the
+false alarm the estimate exists to prevent — and it does it during the batch's
+quietest stretch, when there is nothing else on screen to contradict it.
+
+**Why pass-throughs had to be split out.** A copied original makes no Luma call
+and waits on no slot. Feeding the estimate one combined total forced it to
+treat all work as the same shape, so every mixed batch was wrong in both
+directions at once. The signature now refuses a single number, which is the
+cheapest way to stop it being collapsed again.
+
+**Why a constant of its own, for one integer.** The bug was not arithmetic, it
+was that the ceiling was knowledge held in one module. A second hardcoded `3`
+in `estimate.ts` would have recreated it the moment `LUMA_MAX_CONCURRENT` moved
+the worker's ceiling and left the promise behind.
+
+**What is still assumed, not measured.** Forty-five seconds per generation is
+inherited from the old model and has never been timed — F15's log window was
+cut off by a deploy before any generation completed, so no end-to-end duration
+exists anywhere in the record. The wave *structure* is now right; the constant
+inside it is a placeholder that errs long, and one watched batch would replace
+it with a fact.
+
+**The general shape.** A limit added in one place is not finished until every
+promise made about it moves too. D56 changed what the system *does*; it did not
+change what the system *says it will do*, and nothing failed to make that
+visible — the tests asserted the catalog landed in "4 to 8 minutes", which had
+been the right answer and quietly became the wrong one.
