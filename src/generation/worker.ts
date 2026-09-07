@@ -352,6 +352,23 @@ export async function runOnce(
  * only waiting images remain the loop sleeps and re-polls them. Luma documents
  * 2–5 seconds as a safe cadence.
  */
+/**
+ * How long to leave a generation alone before asking about it again.
+ *
+ * Measured: a generation takes about 93 seconds (p50, 135s worst). Asking
+ * every three seconds produced 25 polls each and 728 requests for 30 finished
+ * photographs — 24 of every 25 answered "still working". Polling is now the
+ * pipeline's largest consumer of the request-rate window, and none of it makes
+ * anything arrive sooner.
+ *
+ * The first wait is long because nothing has ever finished sooner than that;
+ * the rest are short enough that a finished photograph is not left sitting.
+ */
+function pollDelayMs(pollsSoFar: number): number {
+  if (pollsSoFar === 0) return 20_000;
+  return 8_000;
+}
+
 export async function drain(
   deps: WorkerDeps,
   options: {
@@ -364,11 +381,36 @@ export async function drain(
   const pollIntervalMs = options.pollIntervalMs ?? 3_000;
   const sleep = deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
 
-  const waiting = new Set<string>();
+  /**
+   * Generations we are deliberately not asking about yet, and how long is
+   * left on each.
+   *
+   * Counted down as we sleep rather than compared against a clock, so the loop
+   * behaves identically whether time passes for real or a test hands it a
+   * sleep that returns immediately. Entries are dropped once due: an image
+   * still generating puts itself back, and one that has moved on does not —
+   * which is what makes an empty map mean "the batch is finished".
+   */
+  const waiting = new Map<string, number>();
+  /** Survives the countdown, so backoff grows across polls rather than resetting. */
+  const polls = new Map<string, number>();
   let worked = 0;
 
+  const untilNextDue = () => {
+    const left = [...waiting.values()];
+    return left.length === 0 ? pollIntervalMs : Math.min(...left);
+  };
+
+  /** Spends the time we just slept, and releases whatever is now due. */
+  const passTime = (ms: number) => {
+    for (const [id, left] of waiting) {
+      if (left - ms <= 0) waiting.delete(id);
+      else waiting.set(id, left - ms);
+    }
+  };
+
   for (let step = 0; step < maxSteps; step++) {
-    const result = await runOnce(deps, options.batchId, [...waiting]);
+    const result = await runOnce(deps, options.batchId, [...waiting.keys()]);
 
     if (result.kind === "worked") {
       worked += 1;
@@ -376,24 +418,33 @@ export async function drain(
     }
 
     if (result.kind === "waiting") {
-      waiting.add(result.imageId);
+      // Backed off per generation rather than per cycle, so one slow
+      // photograph does not set the pace for the whole batch.
+      const seen = polls.get(result.imageId) ?? 0;
+      polls.set(result.imageId, seen + 1);
+      waiting.set(result.imageId, pollDelayMs(seen));
       continue;
     }
 
     // Room is freed by a generation finishing, which we learn by polling, so
-    // the only thing to do is wait and look again. Not added to `waiting`:
-    // this is the account's state, not any one image's.
+    // the only thing to do is wait and look again. Not recorded against any
+    // one image: this is the account's state.
     if (result.kind === "at_capacity") {
-      await sleep(pollIntervalMs);
-      waiting.clear();
+      // Slept until the next generation is worth asking about, not for a
+      // fixed tick: capacity is freed by one of them finishing, and polling
+      // is the only way we find that out. Waking sooner just burns a loop.
+      const ms = untilNextDue();
+      await sleep(ms);
+      passTime(ms);
       continue;
     }
 
     // Nothing actionable left. If anything is merely waiting, give it time and
     // look again; otherwise the batch is genuinely done.
     if (waiting.size === 0) return worked;
-    await sleep(pollIntervalMs);
-    waiting.clear();
+    const ms = untilNextDue();
+    await sleep(ms);
+    passTime(ms);
   }
 
   deps.log?.(`[worker] stopped after ${maxSteps} steps — this should not happen`);

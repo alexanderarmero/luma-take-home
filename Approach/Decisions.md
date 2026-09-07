@@ -1797,3 +1797,35 @@ promise made about it moves too. D56 changed what the system *does*; it did not
 change what the system *says it will do*, and nothing failed to make that
 visible — the tests asserted the catalog landed in "4 to 8 minutes", which had
 been the right answer and quietly became the wrong one.
+
+
+---
+
+## D59 — Back off polling per generation
+
+**Decision.** A generation is left alone for 20 seconds before the first poll,
+then asked about every 8, tracked per image rather than per cycle.
+
+**Why.** 728 poll requests for 30 finished photographs, 24 of every 25
+answering "still working" (F16.4). Against a 93-second job a three-second
+cadence is guaranteed waste, and polling had become the pipeline's largest
+consumer of the request-rate window — the one limit that was *not* causing
+problems, which is exactly how it would have started causing them.
+
+**Why per generation and not a slower global tick.** A slower tick would make
+every photograph wait for the slowest one. The backoff belongs to the thing
+being waited on.
+
+**Why 20 then 8.** Nothing has ever finished faster than 20 seconds, so an
+earlier first ask cannot succeed; 8 seconds after that is short enough that a
+finished photograph is not left sitting while the next stage waits for it.
+
+**Implementation note worth keeping.** The countdown is *subtracted as we
+sleep* rather than compared against a clock. A wall-clock schedule deadlocked
+the test suite instantly, because tests inject a sleep that returns without
+time passing — so nothing was ever due, and the loop spun to its step ceiling.
+Counting down makes the loop behave identically whether time is real or
+simulated. The same restructuring exposed a second bug: entries left in the
+schedule after their generation moved on meant an empty batch never looked
+finished, so entries are now dropped once due and re-added only by a
+generation that is genuinely still running.

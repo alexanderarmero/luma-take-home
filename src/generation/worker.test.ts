@@ -730,3 +730,88 @@ describe("what a failure records", () => {
     expect(throttles[0]!.stage).toBe("pending_submit");
   });
 });
+
+describe("how often a generation is asked about", () => {
+  it("leaves a new generation alone before the first ask", async () => {
+    // Measured: a generation takes about 93 seconds. Asking after three
+    // produced 25 polls each and 728 requests for 30 finished photographs —
+    // 24 in every 25 answered "still working", and none of it made anything
+    // arrive sooner.
+    const batch = await seed([{ sku: "HG-002", shotIdea: "kitchen" }]);
+    await startGeneration(db, batch.id);
+
+    const slept: number[] = [];
+    let polls = 0;
+    const slow: ImageGenerator = {
+      submit: async () => ({ generationId: `gen-${++polls}`, rateLimit: {} }),
+      poll: async () => ({ state: "pending" }),
+    };
+
+    await drain(
+      { ...deps(slow), sleep: async (ms) => void slept.push(ms) },
+      { batchId: batch.id, maxSteps: 12 },
+    );
+
+    // The first wait is long because nothing has ever finished sooner.
+    expect(Math.max(...slept)).toBeGreaterThanOrEqual(20_000);
+  });
+
+  it("polls far less than once a second for a batch in flight", async () => {
+    const batch = await seed([{ sku: "HG-002", shotIdea: "kitchen" }]);
+    await startGeneration(db, batch.id);
+
+    let polls = 0;
+    let elapsed = 0;
+    const generator: ImageGenerator = {
+      submit: async () => ({ generationId: "gen-1", rateLimit: {} }),
+      poll: async () => {
+        polls += 1;
+        // Finishes after roughly the measured 93 seconds.
+        return elapsed >= 93_000
+          ? { state: "completed", outputUrl: OUTPUT }
+          : { state: "pending" };
+      },
+    };
+
+    await drain(
+      {
+        ...deps(generator),
+        sleep: async (ms) => {
+          elapsed += ms;
+        },
+      },
+      { batchId: batch.id, maxSteps: 400 },
+    );
+
+    // Three shots at ~93 seconds each. At the old three-second cadence this
+    // was about 25 polls per generation; the backoff should roughly halve it.
+    expect(polls).toBeLessThan(13 * 3);
+  });
+
+  it("still finishes the batch rather than waiting forever", async () => {
+    const batch = await seed([{ sku: "HG-002", shotIdea: "kitchen" }]);
+    await startGeneration(db, batch.id);
+
+    let elapsed = 0;
+    const generator: ImageGenerator = {
+      submit: async () => ({ generationId: "gen-1", rateLimit: {} }),
+      poll: async () =>
+        elapsed >= 20_000
+          ? { state: "completed", outputUrl: OUTPUT }
+          : { state: "pending" },
+    };
+
+    await drain(
+      {
+        ...deps(generator),
+        sleep: async (ms) => {
+          elapsed += ms;
+        },
+      },
+      { batchId: batch.id, maxSteps: 400 },
+    );
+
+    const { images } = await getProductImages(db, batch.id, "HG-002");
+    expect(images.every((i) => i.jobState === "posted")).toBe(true);
+  });
+});
