@@ -62,6 +62,7 @@ import { renderReviewPage } from "../review/page.js";
 import { buildReviewState } from "../review/state.js";
 import type { ObjectStore } from "../storage/store.js";
 import type { SlackClient } from "./client.js";
+import { buildHomeView } from "../onboarding/home.js";
 import { verifySlackSignature } from "./signature.js";
 import {
   runVerificationProbes,
@@ -127,6 +128,63 @@ export function createApp(deps: AppDeps) {
       dbAttempts: db.attempts,
       ...(db.detail ? { dbDetail: db.detail } : {}),
     });
+  });
+
+  /**
+   * Slack's Events API.
+   *
+   * Only one event is subscribed: somebody opening the app's Home tab, which
+   * is when its guide is drawn. Slack retries anything it does not get a
+   * prompt 200 for, so the work is deferred and the acknowledgement is not.
+   */
+  app.post("/slack/events", async (c) => {
+    const raw = await c.req.text();
+
+    const verified = verifySlackSignature({
+      body: raw,
+      headers: {
+        "x-slack-request-timestamp": c.req.header("x-slack-request-timestamp"),
+        "x-slack-signature": c.req.header("x-slack-signature"),
+      },
+      signingSecret: deps.signingSecret,
+      nowMs: deps.now(),
+    });
+    if (!verified.ok) return c.json({ error: verified.reason }, 401);
+
+    const payload = JSON.parse(raw) as {
+      type?: string;
+      challenge?: string;
+      event?: { type?: string; user?: string; tab?: string };
+    };
+
+    // Slack proves it owns the URL by asking us to echo a nonce back.
+    if (payload.type === "url_verification" && payload.challenge) {
+      return c.text(payload.challenge, 200, { "content-type": "text/plain" });
+    }
+
+    const event = payload.event;
+    const { slack } = deps;
+
+    if (event?.type === "app_home_opened" && event.user && slack) {
+      // Republished on every open rather than once at install: it is cheap,
+      // and it means a redeploy improving the guide reaches everyone who
+      // already installed the app.
+      const userId = event.user;
+      deps.defer(async () => {
+        await slack
+          .publishHomeView({
+            userId,
+            view: buildHomeView(
+              deps.reviewChannelId ? { reviewChannelId: deps.reviewChannelId } : {},
+            ),
+          })
+          .catch((error: unknown) => {
+            console.error("[home] could not publish", error);
+          });
+      });
+    }
+
+    return c.body(null, 200);
   });
 
   app.post("/slack/commands", async (c) => {
