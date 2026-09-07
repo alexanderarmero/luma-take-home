@@ -690,3 +690,42 @@ nothing paces that burst. It would present exactly as this does: a first
 attempt failing, a retry seconds later succeeding, and no permanent failure.
 **Unverified.** It could equally be the source-photo host or the bucket. D58
 makes the next run answer the question outright rather than by inference.
+
+
+---
+
+## F16 — Second export, after the concurrency gate (2026-09-07, 1000 records, 17 minutes)
+
+| Event | Before (F15) | After |
+|---|---|---|
+| `luma.throttled` | 18 | **0** |
+| `luma.wait` | 21 | **0** |
+| submit → error (429) | 18 | **0** |
+| Pass-through failures | 19 | **0** |
+| `gave up` | 0 | 0 |
+
+**F16.1 — The concurrency gate removed 429s entirely.** Zero throttles across
+seventeen minutes, against eighteen in the previous eleven. The gate holds at
+`3/3 generations running`, logged 218 times.
+
+**F16.2 — Nothing failed at all.** No generation failure, no submit error, and
+no pass-through failure. The nineteen first-attempt pass-through failures of
+F15.3 did not recur, so their cause remains unknown and is now unreproduced.
+The Slack-burst hypothesis (F15.5) is neither confirmed nor refuted; the run
+that would test it did not fail.
+
+**F16.3 — A generation takes 93 seconds (p50), 114s (p95), 135s worst.**
+Measured across 27 submit→complete pairs. Poll requests themselves return in
+114ms (p50).
+
+**F16.4 — Polling was the pipeline's largest consumer of the request window.**
+728 poll requests produced 30 finished photographs: **25 polls per generation**,
+of which 24 answered "still working". At a three-second cadence against a
+93-second job, that is arithmetic rather than bad luck. None of it made
+anything arrive sooner.
+
+**F16.5 — Throughput is bounded by capacity × duration, and by nothing else.**
+Three concurrent at 93 seconds is one photograph every 31 seconds: about
+**25 minutes for a 40-product drop's 48 styled shots**. Slack's posting rate,
+which the design had assumed was binding, is roughly a factor of ten away from
+mattering.

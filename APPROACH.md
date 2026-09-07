@@ -482,14 +482,25 @@ Generation is `image_edit` on `uni-1-max` at **$0.1030/image**. Prompt translati
 **About 13 cents per approved photograph, flat at every scale.** The catalog as delivered —
 16 shot ideas among 40 rows — costs **$5.12**, because the 24 blank rows pass through free.
 
-**In minutes:** a batch is submitted, polled, downloaded and posted in roughly the time it
-takes to post it — Slack's ~1 message/second is the binding constraint — so a 40-product
-drop is about two minutes of machine time. Against the current process (*"two or three
-times a year… weeks later, candidate shots come back by email"*) the change is not a
-percentage.
+**In minutes — measured, not estimated.** A generation takes **93 seconds** at the median
+(135s worst), and Luma allows **three at a time** for this account: ten weight units at
+three per image edit. That is the binding constraint, and it puts a 40-product drop at
+roughly **25 minutes** of machine time for its 48 styled photographs. The 24 pass-throughs
+cost nothing and finish immediately.
 
-**What changes at 10×: nothing, on cost.** It scales linearly and stays trivial. Which is
-exactly why cost is not the thing that breaks.
+I had this wrong until there were logs to read. The earlier claim here was "about two
+minutes, Slack's posting rate is the constraint" — an estimate that never survived contact
+with the API. Slack is not close to binding; Luma's concurrent capacity is, by a factor of
+about ten. See F14 and F16.
+
+Against the current process — *"two or three times a year… weeks later, candidate shots
+come back by email"* — twenty-five minutes is still not a percentage change.
+
+**What changes at 10×: nothing, on cost.** It scales linearly and stays trivial. Time is a
+different story: at three concurrent, 900 styled photographs is about eight hours of
+wall-clock, and 9,000 is three and a half days. That is a queue to be managed rather than a
+wait to be sat through, and it is the first thing that would need a raised capacity
+allowance rather than better code.
 
 ---
 
