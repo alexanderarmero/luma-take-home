@@ -649,3 +649,84 @@ describe("Luma's concurrent capacity", () => {
   });
 
 });
+
+describe("what a failure records", () => {
+  /** Captures the structured events the worker emits. */
+  function recording() {
+    const events: Array<Record<string, unknown>> = [];
+    return { events, observe: (e: Record<string, unknown>) => events.push(e) };
+  }
+
+  it("names the stage, because that is the whole diagnosis", async () => {
+    // "attempt 1 failed" on a pass-through could be the source photo, our
+    // bucket, or Slack refusing the post. Those have nothing to do with each
+    // other, and the old log could not tell them apart.
+    const batch = await seed([{ sku: "HG-003", shotIdea: null }]);
+    await startGeneration(db, batch.id);
+    const { events, observe } = recording();
+
+    await drain(
+      {
+        ...deps(),
+        observe,
+        fetch: (async () =>
+          new Response(null, { status: 404 })) as unknown as typeof fetch,
+        sleep: async () => {},
+      },
+      { batchId: batch.id, maxSteps: 40 },
+    );
+
+    const failure = events.find((e) => e.event === "pipeline.error")!;
+    expect(failure.stage).toBe("pending_fetch");
+    expect(failure.kind).toBe("pass_through");
+    expect(failure.sku).toBe("HG-003");
+    expect(String(failure.message)).toContain("404");
+  });
+
+  it("distinguishes a posting failure from a copying one", async () => {
+    // Both used to read "attempt 1 failed" against a pass-through, which is
+    // how nineteen of them failed in one batch with no recorded cause.
+    const batch = await seed([{ sku: "HG-003", shotIdea: null }]);
+    await startGeneration(db, batch.id);
+    const { events, observe } = recording();
+
+    const failingSlack = createFakeSlack();
+    failingSlack.postMessage = async () => {
+      throw new Error("ratelimited");
+    };
+
+    await drain(
+      { ...deps(), slack: failingSlack, observe, sleep: async () => {} },
+      { batchId: batch.id, maxSteps: 40 },
+    );
+
+    const failure = events.find((e) => e.event === "pipeline.error")!;
+    expect(failure.stage).toBe("stored");
+    expect(String(failure.message)).toContain("ratelimited");
+  });
+
+  it("marks a throttled attempt as such, so it is not read as a fault", async () => {
+    const batch = await seed([{ sku: "HG-002", shotIdea: "kitchen" }]);
+    await startGeneration(db, batch.id);
+    const { events, observe } = recording();
+
+    let calls = 0;
+    const throttling: ImageGenerator = {
+      submit: async () => {
+        calls += 1;
+        if (calls <= 2) throw new GenerationError("HTTP 429", true, 1, true);
+        return { generationId: "gen-1", rateLimit: {} };
+      },
+      poll: async () => ({ state: "completed", outputUrl: OUTPUT }),
+    };
+
+    await drain(
+      { ...deps(throttling), observe, sleep: async () => {} },
+      { batchId: batch.id, maxSteps: 60 },
+    );
+
+    const throttles = events.filter((e) => e.throttled === true);
+    expect(throttles.length).toBeGreaterThan(0);
+    expect(throttles[0]!.stage).toBe("pending_submit");
+  });
+});

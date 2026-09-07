@@ -1722,3 +1722,29 @@ The general shape is worth stating: **instrumenting the interesting subsystem is
 not the same as instrumenting the failure.** The Luma path got structured
 logging because that is where the complexity is; the failures that were actually
 invisible were on the boring path that makes no API call at all.
+
+
+---
+
+## D58 — Instrument the stage, not just the subsystem
+
+**Decision.** Every pipeline failure emits a structured event naming the
+**stage** it failed in — `pending_submit`, `pending_fetch`, `submitted`,
+`stored` — along with the SKU, the filename, the attempt, whether it was
+throttling, and the message.
+
+**Why the stage is the diagnosis.** `[worker] HG-013_original.jpg attempt 1
+failed` is compatible with three unrelated causes: the customer's photo host
+refused the download, our bucket refused the write, or Slack refused the post.
+They share nothing — not the fix, not the owner, not even the severity — and
+the log could not tell them apart. Nineteen failures in one batch produced
+exactly zero diagnosable information (F15.4).
+
+**The general lesson, which this project has now learned twice.** D54 gave the
+Luma path structured logging because that is where the complexity is. But the
+failures that were actually invisible were on the *boring* path — the one that
+makes no API call, has no retry taxonomy, and looked too simple to be worth
+instrumenting. **Instrumenting the interesting subsystem is not the same as
+instrumenting the failure**, and the interesting subsystem is not where the
+unexplained failures live. It is where the *understood* ones live, because that
+is where the attention went.
