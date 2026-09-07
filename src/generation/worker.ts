@@ -15,6 +15,7 @@ import type { ImageModel } from "../pricing.js";
 import type { SlackClient } from "../slack/client.js";
 import type { ObjectStore } from "../storage/store.js";
 import { GenerationError, type ImageGenerator } from "./generator.js";
+import { noopObserver, type Observer } from "./observe.js";
 import {
   buildCandidateBlocks,
   buildFailureNote,
@@ -54,6 +55,15 @@ export interface WorkerDeps {
   sleep?: (ms: number) => Promise<void>;
   /** Overridable because the account's capacity is not ours to hardcode. */
   maxConcurrentGenerations?: number;
+  /**
+   * One structured line per pipeline failure.
+   *
+   * Separate from the Luma observer because most of this pipeline never calls
+   * Luma: a pass-through is a download, a write and a Slack post. Those stages
+   * had no instrumentation at all, which is why nineteen of them could fail in
+   * one batch with no recorded cause anywhere.
+   */
+  observe?: Observer;
 }
 
 export type StepResult =
@@ -285,6 +295,23 @@ export async function runOnce(
   } catch (error) {
     const retryable = error instanceof GenerationError ? error.retryable : true;
     const throttled = error instanceof GenerationError && error.throttled;
+
+    // The stage is the whole diagnosis. "attempt 1 failed" on a pass-through
+    // could be the source photo, our bucket, or Slack refusing the post, and
+    // those have nothing to do with each other.
+    const observe = deps.observe ?? noopObserver;
+    observe({
+      event: "pipeline.error",
+      stage: job.state,
+      kind: job.kind,
+      imageId: job.imageId,
+      filename: job.filename,
+      sku: job.sku,
+      attempt: job.attempts + 1,
+      throttled,
+      retryable,
+      message: (error as Error).message,
+    });
 
     // Being told to slow down is not this photograph's fault, so it does not
     // spend one of its four attempts. Without this a busy batch converts its

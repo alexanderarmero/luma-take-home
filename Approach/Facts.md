@@ -643,3 +643,50 @@ to stop starting generations, not to wait longer between them.
 log shows `HG-001_original.jpg attempt 1 failed`, with no reason: pass-throughs
 make no Luma call, so they appear in no request log, and the worker logged the
 attempt count without the error. The message is now logged.
+
+
+---
+
+## F15 — What the first production log export actually showed (2026-09-07, 150 records, 11 minutes)
+
+A Railway export covering 09:59–10:10, ending in a SIGTERM (a deploy mid-batch),
+so the window is partial. Even so it settles several questions.
+
+| Event | Count |
+|---|---|
+| `luma.call` submit → ok | 18 |
+| `luma.call` submit → error (**all 429, all concurrency**) | 18 |
+| `luma.call` poll → pending | 18 |
+| `luma.call` poll → **failed** | **0** |
+| `luma.throttled` | 18 |
+| `luma.wait` | 21 |
+| `[worker] …_original.jpg attempt 1 failed` | **19** |
+| `gave up` | **0** |
+
+**F15.1 — Luma refused no prompt at all.** Zero `poll:failed`, so no
+`failureCode` was ever returned. Every single API-side failure in the window is
+a 429 on concurrent capacity. *"Images keep failing to generate"* was never a
+content or model problem, and the moderation taxonomy we built is untested in
+practice because nothing has tripped it.
+
+**F15.2 — Nothing reached permanent failure in this window.** Zero "gave up"
+lines. The pass-throughs failed their first attempt and retried.
+
+**F15.3 — Every pass-through failed attempt 1, and only attempt 1.** Nineteen
+of them, spread evenly across the run rather than clustered, roughly 2.5–3
+seconds apart in the later groups. That regular cadence is the signature of
+something systematic per product, not a transient outage.
+
+**F15.4 — The reason is still not in the log.** This build predates D57, so the
+retry line carried the attempt count without the message. The cause remains
+undetermined; the leading hypothesis is below and is **not** confirmed.
+
+**F15.5 — Hypothesis: pass-throughs are the first to reach the Slack posting
+stage.** A pass-through's path is `pending_fetch → stored → posted` with no
+Luma wait in it, so pass-throughs race ahead of styled shots and are the first
+to hit `stored`, which posts a channel line, fetches a permalink and uploads
+files. Slack's per-channel posting allowance is about one message a second, and
+nothing paces that burst. It would present exactly as this does: a first
+attempt failing, a retry seconds later succeeding, and no permanent failure.
+**Unverified.** It could equally be the source-photo host or the bucket. D58
+makes the next run answer the question outright rather than by inference.

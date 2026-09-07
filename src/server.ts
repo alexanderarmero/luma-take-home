@@ -87,6 +87,7 @@ const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
         model: "uni-1-max",
         aspectRatio: "1:1",
         maxConcurrentGenerations: config.maxConcurrentGenerations,
+        observe: consoleObserver,
         log: (message) => console.log(message),
       },
       {
